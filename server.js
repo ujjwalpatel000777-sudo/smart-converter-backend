@@ -113,7 +113,7 @@ app.post('/api/process-code', async (req, res) => {
       });
     }
 
-    console.log(`API usage: ${apiKeyData.name} (${countResult.count}/${countResult.limit}) - Processing ${projectType} project`);
+    // console.log(`API usage: ${apiKeyData.name} (${countResult.count}/${countResult.limit}) - Processing ${projectType} project`);
 
     // Validation for files...
     if (!files || !Array.isArray(files) || files.length === 0) {
@@ -131,9 +131,9 @@ app.post('/api/process-code', async (req, res) => {
       });
     }
 
-    console.log(`\nCOMPLETE REWRITE MODE: Processing ${projectType} project`);
-    console.log(`Files to COMPLETELY REPLACE: ${files.length}`);
-    console.log(`Total words: ${totalWords}`);
+    // console.log(`\nCOMPLETE REWRITE MODE: Processing ${projectType} project`);
+    // console.log(`Files to COMPLETELY REPLACE: ${files.length}`);
+    // console.log(`Total words: ${totalWords}`);
     
     // Create prompt for complete rewrite
     const prompt = createGeminiPrompt(projectType, files, projectLanguage, packageJson);
@@ -144,13 +144,13 @@ app.post('/api/process-code', async (req, res) => {
     const response = await result.response;
     const generatedText = response.text();
 
-    console.log('Received Gemini response for complete rewrite');
+    // console.log('Received Gemini response for complete rewrite');
 
     // IMPROVED JSON PARSING WITH BETTER ERROR HANDLING
     let parsedResponse;
     try {
       // Log the raw response for debugging (truncated)
-      console.log('Raw Gemini response (first 500 chars):', generatedText.substring(0, 500));
+      // console.log('Raw Gemini response (first 500 chars):', generatedText.substring(0, 500));
       
       // Try multiple parsing strategies
       let jsonContent = '';
@@ -159,7 +159,7 @@ app.post('/api/process-code', async (req, res) => {
       const codeBlockMatch = generatedText.match(/```json\s*([\s\S]*?)\s*```/);
       if (codeBlockMatch) {
         jsonContent = codeBlockMatch[1].trim();
-        console.log('Found JSON in code block');
+        // console.log('Found JSON in code block');
       }
       
       // Strategy 2: Look for JSON object starting with { and ending with }
@@ -167,7 +167,7 @@ app.post('/api/process-code', async (req, res) => {
         const jsonMatch = generatedText.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           jsonContent = jsonMatch[0];
-          console.log('Found JSON object in response');
+          // console.log('Found JSON object in response');
         }
       }
       
@@ -181,14 +181,14 @@ app.post('/api/process-code', async (req, res) => {
         
         if (cleaned.startsWith('{') && cleaned.endsWith('}')) {
           jsonContent = cleaned;
-          console.log('Extracted JSON from cleaned response');
+          // console.log('Extracted JSON from cleaned response');
         }
       }
       
       // If we found JSON content, try to parse it
       if (jsonContent) {
         parsedResponse = JSON.parse(jsonContent);
-        console.log('Successfully parsed JSON response');
+        // console.log('Successfully parsed JSON response');
       } else {
         // If no JSON found, log the full response for debugging
         console.error('No JSON content found in Gemini response');
@@ -210,7 +210,7 @@ app.post('/api/process-code', async (req, res) => {
           .trim();
         
         parsedResponse = JSON.parse(fixedJson);
-        console.log('Successfully parsed JSON after cleanup');
+        // console.log('Successfully parsed JSON after cleanup');
       } catch (fallbackError) {
         console.error('Fallback parsing also failed:', fallbackError.message);
         
@@ -244,7 +244,7 @@ app.post('/api/process-code', async (req, res) => {
       parsedResponse.files = [];
     }
 
-    console.log(`Parsed response contains ${parsedResponse.files.length} files`);
+    // console.log(`Parsed response contains ${parsedResponse.files.length} files`);
 
     // Send response back to extension (NO FILE OPERATIONS)
     res.json({
@@ -359,12 +359,12 @@ app.post('/api/generate-api-key', async (req, res) => {
         // Same day - preserve the count to maintain daily limit
         preservedCount = existingApiKey.count;
         preservedResetDate = existingApiKey.last_reset_date;
-        console.log(`✅ Preserving count ${preservedCount} for user ${userName} (same day)`);
+        // console.log(`✅ Preserving count ${preservedCount} for user ${userName} (same day)`);
       } else {
         // Different day - reset count to 0 (normal daily reset)
         preservedCount = 0;
         preservedResetDate = today;
-        console.log(`✅ Resetting count for user ${userName} (new day)`);
+        // console.log(`✅ Resetting count for user ${userName} (new day)`);
       }
     }
 
@@ -399,7 +399,7 @@ app.post('/api/generate-api-key', async (req, res) => {
       }
     }
 
-    console.log(`✅ Generated API key for user: ${userName} (count preserved: ${preservedCount})`);
+    // console.log(`✅ Generated API key for user: ${userName} (count preserved: ${preservedCount})`);
 
     res.json({
       success: true,
@@ -474,7 +474,7 @@ app.post('/api/delete-api-key', async (req, res) => {
       throw updateError;
     }
 
-    console.log(`✅ Deleted API key for user: ${userName}`);
+    // console.log(`✅ Deleted API key for user: ${userName}`);
 
     res.json({
       success: true,
@@ -543,7 +543,7 @@ app.post('/api/update-count', async (req, res) => {
       });
     }
 
-    console.log(`Incremented count for user: ${apiKeyData.name} (${countResult.count}/${countResult.limit})`);
+    // console.log(`Incremented count for user: ${apiKeyData.name} (${countResult.count}/${countResult.limit})`);
 
     res.json({
       success: true,
@@ -633,7 +633,7 @@ app.post('/api/get-user-api-info', async (req, res) => {
       currentCount = 0;
     }
 
-    console.log(`📊 Retrieved API info for user: ${userName}`);
+    // console.log(`📊 Retrieved API info for user: ${userName}`);
 
     // Show a generic masked API key format to indicate one exists
     const maskedApiKey = "sk-abc123************************def456";
@@ -688,7 +688,7 @@ app.get('/api/check-user-limit', async (req, res) => {
     const currentUserCount = count || 0;
     const limitReached = currentUserCount >= MAX_USERS;
     
-    console.log(`📊 User limit check: ${currentUserCount}/${MAX_USERS} users`);
+    // console.log(`📊 User limit check: ${currentUserCount}/${MAX_USERS} users`);
     
     if (limitReached) {
       return res.json({
@@ -743,7 +743,7 @@ app.post('/api/handle-user-auth', async (req, res) => {
 
     const userEmail = email.trim();
 
-    console.log(`🔐 Processing user auth for: ${userEmail}`);
+    // console.log(`🔐 Processing user auth for: ${userEmail}`);
 
     // Store user in database (same logic as original frontend code)
     const { data: userData, error: userError } = await supabase
@@ -767,7 +767,7 @@ app.post('/api/handle-user-auth', async (req, res) => {
       console.error('Error details:', userError.details);
       throw new Error(`Failed to create/update user: ${userError.message}`);
     } else {
-      console.log('User created/updated successfully:', userData);
+      // console.log('User created/updated successfully:', userData);
     }
 
     // Create/update API key entry (same logic as original frontend code)
@@ -793,7 +793,7 @@ app.post('/api/handle-user-auth', async (req, res) => {
       console.error('Error details:', apiKeyError.details);
       throw new Error(`Failed to create/update API key record: ${apiKeyError.message}`);
     } else {
-      console.log('API key created/updated successfully:', apiData);
+      // console.log('API key created/updated successfully:', apiData);
     }
 
     // Success response
@@ -837,7 +837,7 @@ app.post('/api/submit-feedback', async (req, res) => {
       description: description.trim()
     };
 
-    console.log('📝 Submitting feedback:', feedbackData.title);
+    // console.log('📝 Submitting feedback:', feedbackData.title);
 
     // Insert feedback into database (same logic as original frontend code)
     const { data, error: supabaseError } = await supabase
@@ -850,7 +850,7 @@ app.post('/api/submit-feedback', async (req, res) => {
       throw new Error(`Failed to submit feedback: ${supabaseError.message}`);
     }
 
-    console.log('Feedback submitted successfully:', data);
+    // console.log('Feedback submitted successfully:', data);
 
     // Success response
     res.json({
