@@ -13,11 +13,6 @@ require('dotenv').config();
 const app = express();
 const port = process.env.PORT || 3001;
 
-// Middleware
-app.use(cors());
-app.use(express.json({ limit: '50mb' })); // Increase limit for large code files
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
 const paddle = new Paddle(process.env.PADDLE_API_KEY);
 
 
@@ -29,6 +24,86 @@ const supabase = createClient(supabaseUrl, supabaseServiceRole);
 
 // Initialize Gemini AI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+// Middleware
+app.use(cors());
+
+// Paddle webhook endpoint
+app.post('/api/webhooks/paddle', express.raw({type: 'application/json'}), async (req, res) => {
+  try {
+    console.log('=== PADDLE WEBHOOK REQUEST RECEIVED ===');
+    console.log('Headers:', req.headers);
+    console.log('Body type:', typeof req.body);
+    console.log('Body length:', req.body.length);
+
+    const signature = req.headers['paddle-signature'];
+    const rawRequestBody = req.body.toString();
+    const secretKey = process.env.PADDLE_WEBHOOK_SECRET
+
+    console.log('Paddle signature:', signature);
+
+    if (!signature || !rawRequestBody) {
+      console.log('ERROR: Signature or request body missing');
+      return res.status(400).json({ error: 'Invalid webhook request' });
+    }
+
+    // Verify webhook signature using Paddle SDK
+    console.log('Verifying webhook signature...');
+    const eventData = await paddle.webhooks.unmarshal(rawRequestBody, secretKey, signature);
+    
+    console.log('Webhook signature verification successful');
+    console.log('=== PADDLE WEBHOOK EVENT DETAILS ===');
+    console.log('Event type:', eventData.eventType);
+    console.log('Event data:', JSON.stringify(eventData.data, null, 2));
+
+    // Handle different event types
+    switch (eventData.eventType) {
+      case 'subscription.created':
+      case 'subscription.activated':
+      case 'subscription.updated':
+        console.log('Processing subscription created/activated/updated event');
+        await handleSubscriptionActivated(eventData.data);
+        break;
+        
+      case 'subscription.canceled':
+        console.log('Processing subscription cancelled event');
+        await handleSubscriptionCancelled(eventData.data);
+        break;
+        
+      case 'subscription.paused':
+        console.log('Processing subscription paused event');
+        await handleSubscriptionPaused(eventData.data);
+        break;
+        
+      case 'subscription.resumed':
+        console.log('Processing subscription resumed event');
+        await handleSubscriptionResumed(eventData.data);
+        break;
+
+      default:
+        console.log('Unhandled event type:', eventData.eventType);
+    }
+
+    console.log('=== PADDLE WEBHOOK PROCESSING SUCCESSFUL ===');
+    res.status(200).json({ received: true });
+
+  } catch (error) {
+    console.log('=== PADDLE WEBHOOK ERROR ===');
+    console.log('Full error object:', JSON.stringify(error, null, 2));
+    console.log('Error name:', error.name);
+    console.log('Error message:', error.message);
+    console.log('Error stack:', error.stack);
+    console.log('Request body (raw):', req.body);
+    
+    res.status(400).json({ error: 'Webhook failed' });
+  }
+});
+
+
+app.use(express.json({ limit: '50mb' })); // Increase limit for large code files
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+
 
 // Helper function to hash API key
 async function hashApiKey(apiKey) {
@@ -374,76 +449,7 @@ app.post('/api/payment/create-subscription', async (req, res) => {
   }
 });
 
-// Paddle webhook endpoint
-app.post('/api/webhooks/paddle', express.raw({type: 'application/json'}), async (req, res) => {
-  try {
-    console.log('=== PADDLE WEBHOOK REQUEST RECEIVED ===');
-    console.log('Headers:', req.headers);
-    console.log('Body type:', typeof req.body);
-    console.log('Body length:', req.body.length);
 
-    const signature = req.headers['paddle-signature'];
-    const rawRequestBody = req.body.toString();
-    const secretKey = process.env.PADDLE_WEBHOOK_SECRET
-
-    console.log('Paddle signature:', signature);
-
-    if (!signature || !rawRequestBody) {
-      console.log('ERROR: Signature or request body missing');
-      return res.status(400).json({ error: 'Invalid webhook request' });
-    }
-
-    // Verify webhook signature using Paddle SDK
-    console.log('Verifying webhook signature...');
-    const eventData = await paddle.webhooks.unmarshal(rawRequestBody, secretKey, signature);
-    
-    console.log('Webhook signature verification successful');
-    console.log('=== PADDLE WEBHOOK EVENT DETAILS ===');
-    console.log('Event type:', eventData.eventType);
-    console.log('Event data:', JSON.stringify(eventData.data, null, 2));
-
-    // Handle different event types
-    switch (eventData.eventType) {
-      case 'subscription.created':
-      case 'subscription.activated':
-      case 'subscription.updated':
-        console.log('Processing subscription created/activated/updated event');
-        await handleSubscriptionActivated(eventData.data);
-        break;
-        
-      case 'subscription.canceled':
-        console.log('Processing subscription cancelled event');
-        await handleSubscriptionCancelled(eventData.data);
-        break;
-        
-      case 'subscription.paused':
-        console.log('Processing subscription paused event');
-        await handleSubscriptionPaused(eventData.data);
-        break;
-        
-      case 'subscription.resumed':
-        console.log('Processing subscription resumed event');
-        await handleSubscriptionResumed(eventData.data);
-        break;
-
-      default:
-        console.log('Unhandled event type:', eventData.eventType);
-    }
-
-    console.log('=== PADDLE WEBHOOK PROCESSING SUCCESSFUL ===');
-    res.status(200).json({ received: true });
-
-  } catch (error) {
-    console.log('=== PADDLE WEBHOOK ERROR ===');
-    console.log('Full error object:', JSON.stringify(error, null, 2));
-    console.log('Error name:', error.name);
-    console.log('Error message:', error.message);
-    console.log('Error stack:', error.stack);
-    console.log('Request body (raw):', req.body);
-    
-    res.status(400).json({ error: 'Webhook failed' });
-  }
-});
 
 // Endpoint to process code with Gemini
 app.post('/api/process-code', async (req, res) => {
