@@ -384,7 +384,7 @@ app.post('/api/webhooks/paddle', express.raw({type: 'application/json'}), async 
 
     const signature = req.headers['paddle-signature'];
     const rawRequestBody = req.body.toString();
-    const secretKey = process.env.PADDLE_WEBHOOK_SECRET || '';
+    const secretKey = process.env.PADDLE_WEBHOOK_SECRET
 
     console.log('Paddle signature:', signature);
 
