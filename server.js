@@ -200,7 +200,7 @@ async function handleSubscriptionUpdated(subscription) {
   console.log('Subscription object:', JSON.stringify(subscription, null, 2));
 
   // Check if subscription has a scheduled change to cancel
-  if (subscription.scheduled_change && subscription.scheduled_change.action === 'cancel') {
+  if (subscription.scheduledChange && subscription.scheduledChange.action === 'cancel') {
     console.log('Subscription has scheduled cancellation');
     
     const { error } = await supabase
@@ -216,8 +216,10 @@ async function handleSubscriptionUpdated(subscription) {
     } else {
       console.log('SUCCESS: Subscription marked as cancel_at_period_end for subscription:', subscription.id);
     }
-  } else if (subscription.status === 'active' && !subscription.scheduled_change) {
+  } else if (subscription.status === 'active' && !subscription.scheduledChange) {
     // Subscription is active with no scheduled changes (cancellation was removed)
+    console.log('Subscription is active with no scheduled changes - reactivating');
+    
     const { error } = await supabase
       .from('users')
       .update({ 
@@ -231,9 +233,12 @@ async function handleSubscriptionUpdated(subscription) {
     } else {
       console.log('SUCCESS: Subscription reactivated for subscription:', subscription.id);
     }
+  } else {
+    console.log('No status update needed for subscription:', subscription.id);
+    console.log('Current status:', subscription.status);
+    console.log('Scheduled change:', subscription.scheduledChange);
   }
 }
-
 async function handleSubscriptionCancelled(subscription) {
   console.log('=== HANDLING SUBSCRIPTION CANCELLED ===');
   console.log('Subscription object:', JSON.stringify(subscription, null, 2));
