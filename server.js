@@ -371,7 +371,7 @@ app.post('/api/subscription/cancel', async (req, res) => {
 
       console.log('Sending cancel request to Paddle:', cancelRequest);
       
-      const response = await fetch(`https://sandbox-api.paddle.com/subscriptions/${user.subscription_id}/cancel`, {
+      const response = await fetch(`https://api.paddle.com/subscriptions/${user.subscription_id}/cancel`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${process.env.PADDLE_API_KEY}`,
@@ -389,27 +389,62 @@ app.post('/api/subscription/cancel', async (req, res) => {
       const cancelledSubscription = await response.json();
       console.log('Paddle subscription cancellation scheduled successfully:', cancelledSubscription);
 
-      // Update user subscription status to indicate cancellation is scheduled
-      console.log('Updating user subscription status to cancel_at_period_end...');
-      const { error: updateError } = await supabase
-        .from('users')
-        .update({ 
-          subscription_status: 'cancel_at_period_end'
-        })
-        .eq('name', user.name);
+      // Check if Paddle returned a scheduled_change for cancellation
+      const hasScheduledCancellation = cancelledSubscription.data?.scheduled_change?.action === 'cancel';
+      
+      if (hasScheduledCancellation) {
+        // Update user subscription status to indicate cancellation is scheduled
+        console.log('Updating user subscription status to cancel_at_period_end...');
+        const { error: updateError } = await supabase
+          .from('users')
+          .update({ 
+            subscription_status: 'cancel_at_period_end'
+          })
+          .eq('name', user.name);
 
-      if (updateError) {
-        console.log('=== USER UPDATE ERROR ===');
-        console.log('Full updateError object:', JSON.stringify(updateError, null, 2));
+        if (updateError) {
+          console.log('=== USER UPDATE ERROR ===');
+          console.log('Full updateError object:', JSON.stringify(updateError, null, 2));
+          
+          return res.status(500).json({
+            success: false,
+            error: 'Database update failed',
+            message: 'Subscription was cancelled in Paddle but failed to update local status'
+          });
+        }
+
+        console.log('User subscription status updated successfully to cancel_at_period_end');
         
-        return res.status(500).json({
-          success: false,
-          error: 'Database update failed',
-          message: 'Subscription was cancelled in Paddle but failed to update local status'
+        res.json({
+          success: true,
+          message: 'Subscription cancelled successfully',
+          details: 'Your subscription will remain active until the end of your current billing period. You will continue to have Pro access until then.',
+          status: 'cancel_at_period_end',
+          effective_at: cancelledSubscription.data?.scheduled_change?.effective_at
+        });
+      } else {
+        // Immediate cancellation (though we requested next_billing_period)
+        console.log('Subscription was cancelled immediately');
+        const { error: updateError } = await supabase
+          .from('users')
+          .update({ 
+            subscription_status: 'cancelled',
+            plan: 'free'
+          })
+          .eq('name', user.name);
+
+        if (updateError) {
+          console.log('=== USER UPDATE ERROR ===');
+          console.log('Full updateError object:', JSON.stringify(updateError, null, 2));
+        }
+
+        res.json({
+          success: true,
+          message: 'Subscription cancelled immediately',
+          details: 'Your subscription has been cancelled and you have been downgraded to the free plan.',
+          status: 'cancelled'
         });
       }
-
-      console.log('User subscription status updated successfully to cancel_at_period_end');
 
     } catch (paddleError) {
       console.log('=== PADDLE CANCELLATION ERROR ===');
@@ -423,14 +458,6 @@ app.post('/api/subscription/cancel', async (req, res) => {
         details: paddleError.message
       });
     }
-
-    console.log('=== SUBSCRIPTION CANCELLATION SUCCESSFUL ===');
-    res.json({
-      success: true,
-      message: 'Subscription cancelled successfully',
-      details: 'Your subscription will remain active until the end of your current billing period. You will continue to have Pro access until then.',
-      status: 'cancel_at_period_end'
-    });
 
   } catch (error) {
     console.log('=== MAIN CATCH BLOCK ERROR ===');
@@ -447,7 +474,6 @@ app.post('/api/subscription/cancel', async (req, res) => {
     });
   }
 });
-
 // Create subscription endpoint (unchanged)
 app.post('/api/payment/create-subscription', async (req, res) => {
   try {
