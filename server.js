@@ -371,7 +371,7 @@ app.post('/api/subscription/cancel', async (req, res) => {
 
       console.log('Sending cancel request to Paddle:', cancelRequest);
       
-      const response = await fetch(`https://api.paddle.com/subscriptions/${user.subscription_id}/cancel`, {
+      const response = await fetch(`https://sandbox-api.paddle.com/subscriptions/${user.subscription_id}/cancel`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${process.env.PADDLE_API_KEY}`,
