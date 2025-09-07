@@ -1187,7 +1187,7 @@ app.post('/api/get-user-api-info', async (req, res) => {
 
     const userName = name.trim();
 
-    // Get user's API key info with plan details
+    // Get user's API key info with plan details AND subscription info
     const { data: apiKeyData, error: findError } = await supabase
       .from('api_keys')
       .select(`
@@ -1196,7 +1196,11 @@ app.post('/api/get-user-api-info', async (req, res) => {
         count,
         last_reset_date,
         created_at,
-        users!inner(plan)
+        users!inner(
+          plan,
+          subscription_status,
+          subscription_id
+        )
       `)
       .eq('name', userName)
       .single();
@@ -1253,6 +1257,8 @@ app.post('/api/get-user-api-info', async (req, res) => {
         count: currentCount,
         remaining: limit - currentCount,
         plan: apiKeyData.users.plan,
+        subscription_status: apiKeyData.users.subscription_status, // ADD THIS
+        subscription_id: apiKeyData.users.subscription_id, // ADD THIS
         last_reset_date: apiKeyData.last_reset_date,
         created_at: apiKeyData.created_at,
         is_limit_reached: currentCount >= limit
