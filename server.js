@@ -28,7 +28,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 // Middleware
 app.use(cors());
 
-// Paddle webhook endpoint
+// Enhanced webhook endpoint
 app.post('/api/webhooks/paddle', express.raw({type: 'application/json'}), async (req, res) => {
   try {
     console.log('=== PADDLE WEBHOOK REQUEST RECEIVED ===');
@@ -38,7 +38,7 @@ app.post('/api/webhooks/paddle', express.raw({type: 'application/json'}), async 
 
     const signature = req.headers['paddle-signature'];
     const rawRequestBody = req.body.toString();
-    const secretKey = process.env.PADDLE_WEBHOOK_SECRET
+    const secretKey = process.env.PADDLE_WEBHOOK_SECRET;
 
     console.log('Paddle signature:', signature);
 
@@ -60,9 +60,13 @@ app.post('/api/webhooks/paddle', express.raw({type: 'application/json'}), async 
     switch (eventData.eventType) {
       case 'subscription.created':
       case 'subscription.activated':
-      case 'subscription.updated':
-        console.log('Processing subscription created/activated/updated event');
+        console.log('Processing subscription created/activated event');
         await handleSubscriptionActivated(eventData.data);
+        break;
+        
+      case 'subscription.updated':
+        console.log('Processing subscription updated event');
+        await handleSubscriptionUpdated(eventData.data);
         break;
         
       case 'subscription.canceled':
@@ -145,7 +149,7 @@ async function findApiKeyRecord(plainApiKey) {
   return null;
 }
 
-// Paddle webhook handlers
+// Enhanced Paddle webhook handlers
 async function handleSubscriptionActivated(subscription) {
   console.log('=== HANDLING SUBSCRIPTION ACTIVATED ===');
   console.log('Subscription object:', JSON.stringify(subscription, null, 2));
@@ -191,6 +195,45 @@ async function handleSubscriptionActivated(subscription) {
   }
 }
 
+async function handleSubscriptionUpdated(subscription) {
+  console.log('=== HANDLING SUBSCRIPTION UPDATED ===');
+  console.log('Subscription object:', JSON.stringify(subscription, null, 2));
+
+  // Check if subscription has a scheduled change to cancel
+  if (subscription.scheduled_change && subscription.scheduled_change.action === 'cancel') {
+    console.log('Subscription has scheduled cancellation');
+    
+    const { error } = await supabase
+      .from('users')
+      .update({ 
+        subscription_status: 'cancel_at_period_end'
+      })
+      .eq('subscription_id', subscription.id);
+     
+    if (error) {
+      console.log('ERROR: Failed to update subscription status to cancel_at_period_end');
+      console.log('Database error:', JSON.stringify(error, null, 2));
+    } else {
+      console.log('SUCCESS: Subscription marked as cancel_at_period_end for subscription:', subscription.id);
+    }
+  } else if (subscription.status === 'active' && !subscription.scheduled_change) {
+    // Subscription is active with no scheduled changes (cancellation was removed)
+    const { error } = await supabase
+      .from('users')
+      .update({ 
+        subscription_status: 'active'
+      })
+      .eq('subscription_id', subscription.id);
+     
+    if (error) {
+      console.log('ERROR: Failed to reactivate subscription status');
+      console.log('Database error:', JSON.stringify(error, null, 2));
+    } else {
+      console.log('SUCCESS: Subscription reactivated for subscription:', subscription.id);
+    }
+  }
+}
+
 async function handleSubscriptionCancelled(subscription) {
   console.log('=== HANDLING SUBSCRIPTION CANCELLED ===');
   console.log('Subscription object:', JSON.stringify(subscription, null, 2));
@@ -207,7 +250,7 @@ async function handleSubscriptionCancelled(subscription) {
     console.log('ERROR: Failed to cancel subscription in database');
     console.log('Database error:', JSON.stringify(error, null, 2));
   } else {
-    console.log('SUCCESS: Subscription cancelled for subscription:', subscription.id);
+    console.log('SUCCESS: Subscription cancelled and downgraded to free for subscription:', subscription.id);
   }
 }
 
@@ -251,7 +294,7 @@ async function handleSubscriptionResumed(subscription) {
   }
 }
 
-// Cancel subscription endpoint
+// Enhanced cancel subscription endpoint
 app.post('/api/subscription/cancel', async (req, res) => {
   try {
     const { userName } = req.body;
@@ -263,6 +306,7 @@ app.post('/api/subscription/cancel', async (req, res) => {
     if (!userName) {
       console.log('ERROR: Missing userName');
       return res.status(400).json({
+        success: false,
         error: 'Missing required fields',
         message: 'UserName is required'
       });
@@ -281,6 +325,7 @@ app.post('/api/subscription/cancel', async (req, res) => {
       console.log('Full userError object:', JSON.stringify(userError, null, 2));
       
       return res.status(404).json({
+        success: false,
         error: 'User not found',
         message: 'User account not found'
       });
@@ -292,60 +337,99 @@ app.post('/api/subscription/cancel', async (req, res) => {
     if (!user.subscription_id) {
       console.log('ERROR: User has no subscription');
       return res.status(400).json({
+        success: false,
         error: 'No subscription found',
         message: 'User does not have an active subscription'
       });
     }
 
+    // Check if subscription is already cancelled or scheduled for cancellation
     if (user.subscription_status === 'cancelled') {
       console.log('ERROR: Subscription already cancelled');
       return res.status(400).json({
+        success: false,
         error: 'Already cancelled',
         message: 'Subscription is already cancelled'
       });
     }
 
-    // Cancel subscription in Paddle
-    console.log('Cancelling Paddle subscription:', user.subscription_id);
+    if (user.subscription_status === 'cancel_at_period_end') {
+      console.log('ERROR: Subscription already scheduled for cancellation');
+      return res.status(400).json({
+        success: false,
+        error: 'Already scheduled for cancellation',
+        message: 'Subscription is already scheduled to cancel at the end of the billing period'
+      });
+    }
+
+    // Cancel subscription in Paddle at the end of billing period
+    console.log('Cancelling Paddle subscription at end of billing period:', user.subscription_id);
     try {
-      const cancelledSubscription = await paddle.subscriptions.cancel(user.subscription_id, {
-        effectiveFrom: 'next_billing_period'
+      const cancelRequest = {
+        effective_from: 'next_billing_period'
+      };
+
+      console.log('Sending cancel request to Paddle:', cancelRequest);
+      
+      const response = await fetch(`https://api.paddle.com/subscriptions/${user.subscription_id}/cancel`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.PADDLE_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(cancelRequest)
       });
 
-      console.log('Paddle subscription cancelled successfully:', cancelledSubscription);
+      if (!response.ok) {
+        const errorData = await response.text();
+        console.log('Paddle API error response:', errorData);
+        throw new Error(`Paddle API error: ${response.status} - ${errorData}`);
+      }
+
+      const cancelledSubscription = await response.json();
+      console.log('Paddle subscription cancellation scheduled successfully:', cancelledSubscription);
+
+      // Update user subscription status to indicate cancellation is scheduled
+      console.log('Updating user subscription status to cancel_at_period_end...');
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({ 
+          subscription_status: 'cancel_at_period_end'
+        })
+        .eq('name', user.name);
+
+      if (updateError) {
+        console.log('=== USER UPDATE ERROR ===');
+        console.log('Full updateError object:', JSON.stringify(updateError, null, 2));
+        
+        return res.status(500).json({
+          success: false,
+          error: 'Database update failed',
+          message: 'Subscription was cancelled in Paddle but failed to update local status'
+        });
+      }
+
+      console.log('User subscription status updated successfully to cancel_at_period_end');
+
     } catch (paddleError) {
       console.log('=== PADDLE CANCELLATION ERROR ===');
       console.log('Full paddleError object:', JSON.stringify(paddleError, null, 2));
-      
-      console.log('Warning: Paddle cancellation failed, but continuing with database update');
-    }
-
-    // Update user subscription status in database
-    console.log('Updating user subscription status in database...');
-    const { error: updateError } = await supabase
-      .from('users')
-      .update({ 
-        subscription_status: 'cancelled'
-      })
-      .eq('name', user.name);
-
-    if (updateError) {
-      console.log('=== USER UPDATE ERROR ===');
-      console.log('Full updateError object:', JSON.stringify(updateError, null, 2));
+      console.log('Error message:', paddleError.message);
       
       return res.status(500).json({
-        error: 'Database update failed',
-        message: 'Failed to update subscription status'
+        success: false,
+        error: 'Paddle cancellation failed',
+        message: 'Failed to cancel subscription with payment provider',
+        details: paddleError.message
       });
     }
-
-    console.log('User subscription status updated successfully');
 
     console.log('=== SUBSCRIPTION CANCELLATION SUCCESSFUL ===');
     res.json({
       success: true,
       message: 'Subscription cancelled successfully',
-      details: 'You will continue to have access to pro features until the end of your current billing period'
+      details: 'Your subscription will remain active until the end of your current billing period. You will continue to have Pro access until then.',
+      status: 'cancel_at_period_end'
     });
 
   } catch (error) {
@@ -356,6 +440,7 @@ app.post('/api/subscription/cancel', async (req, res) => {
     console.log('Error stack:', error.stack);
     
     res.status(500).json({
+      success: false,
       error: 'Internal server error',
       message: 'Failed to cancel subscription',
       details: error.message
@@ -363,7 +448,142 @@ app.post('/api/subscription/cancel', async (req, res) => {
   }
 });
 
-// Create subscription endpoint
+// New endpoint to reactivate subscription (remove scheduled cancellation)
+app.post('/api/subscription/reactivate', async (req, res) => {
+  try {
+    const { userName } = req.body;
+    
+    console.log('=== REACTIVATE SUBSCRIPTION REQUEST ===');
+    console.log('Request body:', req.body);
+    console.log('UserName:', userName);
+
+    if (!userName) {
+      console.log('ERROR: Missing userName');
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields',
+        message: 'UserName is required'
+      });
+    }
+
+    // Check if user exists and get their subscription details
+    console.log('Checking if user exists with name:', userName);
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('name, subscription_id, subscription_status, plan')
+      .eq('name', userName)
+      .single();
+
+    if (userError) {
+      console.log('=== USER LOOKUP ERROR ===');
+      console.log('Full userError object:', JSON.stringify(userError, null, 2));
+      
+      return res.status(404).json({
+        success: false,
+        error: 'User not found',
+        message: 'User account not found'
+      });
+    }
+
+    console.log('User found:', user);
+
+    // Check if user has a subscription scheduled for cancellation
+    if (user.subscription_status !== 'cancel_at_period_end') {
+      console.log('ERROR: Subscription is not scheduled for cancellation');
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid operation',
+        message: 'Subscription is not scheduled for cancellation'
+      });
+    }
+
+    // Remove scheduled cancellation in Paddle
+    console.log('Removing scheduled cancellation in Paddle:', user.subscription_id);
+    try {
+      const updateRequest = {
+        scheduled_change: null
+      };
+
+      console.log('Sending update request to Paddle:', updateRequest);
+      
+      const response = await fetch(`https://api.paddle.com/subscriptions/${user.subscription_id}`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${process.env.PADDLE_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(updateRequest)
+      });
+
+      if (!response.ok) {
+        const errorData = await response.text();
+        console.log('Paddle API error response:', errorData);
+        throw new Error(`Paddle API error: ${response.status} - ${errorData}`);
+      }
+
+      const updatedSubscription = await response.json();
+      console.log('Paddle scheduled cancellation removed successfully:', updatedSubscription);
+
+      // Update user subscription status back to active
+      console.log('Updating user subscription status to active...');
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({ 
+          subscription_status: 'active'
+        })
+        .eq('name', user.name);
+
+      if (updateError) {
+        console.log('=== USER UPDATE ERROR ===');
+        console.log('Full updateError object:', JSON.stringify(updateError, null, 2));
+        
+        return res.status(500).json({
+          success: false,
+          error: 'Database update failed',
+          message: 'Cancellation was removed in Paddle but failed to update local status'
+        });
+      }
+
+      console.log('User subscription status updated successfully to active');
+
+    } catch (paddleError) {
+      console.log('=== PADDLE REACTIVATION ERROR ===');
+      console.log('Full paddleError object:', JSON.stringify(paddleError, null, 2));
+      console.log('Error message:', paddleError.message);
+      
+      return res.status(500).json({
+        success: false,
+        error: 'Paddle reactivation failed',
+        message: 'Failed to reactivate subscription with payment provider',
+        details: paddleError.message
+      });
+    }
+
+    console.log('=== SUBSCRIPTION REACTIVATION SUCCESSFUL ===');
+    res.json({
+      success: true,
+      message: 'Subscription reactivated successfully',
+      details: 'Your subscription will now continue to renew automatically.',
+      status: 'active'
+    });
+
+  } catch (error) {
+    console.log('=== MAIN CATCH BLOCK ERROR ===');
+    console.log('Full error object:', JSON.stringify(error, null, 2));
+    console.log('Error name:', error.name);
+    console.log('Error message:', error.message);
+    console.log('Error stack:', error.stack);
+    
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: 'Failed to reactivate subscription',
+      details: error.message
+    });
+  }
+});
+
+// Create subscription endpoint (unchanged)
 app.post('/api/payment/create-subscription', async (req, res) => {
   try {
     const { userName, plan } = req.body;
@@ -448,7 +668,6 @@ app.post('/api/payment/create-subscription', async (req, res) => {
     });
   }
 });
-
 
 
 // Endpoint to process code with Gemini
