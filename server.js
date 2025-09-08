@@ -68,7 +68,12 @@ app.post('/api/webhooks/paddle', express.raw({type: 'application/json'}), async 
         console.log('Processing subscription updated event');
         await handleSubscriptionUpdated(eventData.data);
         break;
-        
+
+      case 'subscription.past_due':
+        console.log('Processing subscription past due event');
+        await handleSubscriptionPastDue(eventData.data);
+        break;
+
       case 'subscription.canceled':
         console.log('Processing subscription cancelled event');
         await handleSubscriptionCancelled(eventData.data);
@@ -194,6 +199,25 @@ async function handleSubscriptionActivated(subscription) {
     console.log('SUCCESS: Subscription activated for user:', user.name);
   }
 }
+async function handleSubscriptionPastDue(subscription) {
+  console.log('=== HANDLING SUBSCRIPTION PAST DUE ===');
+  console.log('Subscription object:', JSON.stringify(subscription, null, 2));
+
+  const { error } = await supabase
+    .from('users')
+    .update({ 
+      plan: 'free',
+      subscription_status: 'past_due'
+    })
+    .eq('subscription_id', subscription.id);
+   
+  if (error) {
+    console.log('ERROR: Failed to handle past due subscription in database');
+    console.log('Database error:', JSON.stringify(error, null, 2));
+  } else {
+    console.log('SUCCESS: Subscription marked as past due and downgraded to free for subscription:', subscription.id);
+  }
+}
 
 async function handleSubscriptionUpdated(subscription) {
   console.log('=== HANDLING SUBSCRIPTION UPDATED ===');
@@ -299,7 +323,7 @@ async function handleSubscriptionResumed(subscription) {
   }
 }
 
-// Enhanced cancel subscription endpoint
+
 app.post('/api/subscription/cancel', async (req, res) => {
   try {
     const { userName } = req.body;
@@ -364,6 +388,16 @@ app.post('/api/subscription/cancel', async (req, res) => {
         success: false,
         error: 'Already scheduled for cancellation',
         message: 'Subscription is already scheduled to cancel at the end of the billing period'
+      });
+    }
+
+    // Check if subscription is past due
+    if (user.subscription_status === 'past_due') {
+      console.log('ERROR: Subscription is past due');
+      return res.status(400).json({
+        success: false,
+        error: 'Subscription past due',
+        message: 'Cannot cancel a past due subscription. Please update your payment method first or contact support.'
       });
     }
 
@@ -479,6 +513,7 @@ app.post('/api/subscription/cancel', async (req, res) => {
     });
   }
 });
+
 // Create subscription endpoint (unchanged)
 app.post('/api/payment/create-subscription', async (req, res) => {
   try {
