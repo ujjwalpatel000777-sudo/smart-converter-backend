@@ -7,6 +7,8 @@ const path = require('path');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { createClient } = require('@supabase/supabase-js');
 const { Paddle } = require('@paddle/paddle-node-sdk');
+const OpenAI = require('openai');
+
 
 require('dotenv').config();
 
@@ -22,9 +24,11 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceRole = process.env.SUPABASE_SERVICE_ROLE
 const supabase = createClient(supabaseUrl, supabaseServiceRole);
 
-// Initialize Gemini AI
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
+// Initialize deepseek AI
+const deepseekClient = new OpenAI({
+  baseURL: 'https://api.deepseek.com',
+  apiKey: process.env.DEEPSEEK_API_KEY
+});
 // Middleware
 app.use(cors());
 
@@ -114,18 +118,18 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 
 
-// Helper function to hash API key
+// Helper function to hash API key (unchanged)
 async function hashApiKey(apiKey) {
   const saltRounds = 12;
   return await bcrypt.hash(apiKey, saltRounds);
 }
 
-// Helper function to verify API key
+// Helper function to verify API key (unchanged)
 async function verifyApiKey(plainApiKey, hashedApiKey) {
   return await bcrypt.compare(plainApiKey, hashedApiKey);
 }
 
-// Helper function to find API key by comparing with all hashed keys
+// Helper function to find API key by comparing with all hashed keys (unchanged)
 async function findApiKeyRecord(plainApiKey) {
   // Get all API key records
   const { data: allApiKeys, error } = await supabase
@@ -322,7 +326,42 @@ async function handleSubscriptionResumed(subscription) {
     console.log('SUCCESS: Subscription resumed for subscription:', subscription.id);
   }
 }
+async function callDeepSeekAPI(prompt, model) {
+  // Map custom model names to DeepSeek API models
+  let deepseekModel;
+  switch(model) {
+    case 'DeepSeek-R1-0528':
+    case 'DeepSeek-V3.1-thinking':
+      deepseekModel = 'deepseek-reasoner'; // thinking mode
+      break;
+    case 'DeepSeek-V3.1':
+    default:
+      deepseekModel = 'deepseek-chat'; // non-thinking mode
+      break;
+  }
 
+  try {
+    const completion = await deepseekClient.chat.completions.create({
+      model: deepseekModel,
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an expert software refactoring assistant. Always return valid JSON responses as requested.'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      temperature: 0.0, // Best for coding tasks
+      stream: false
+    });
+
+    return completion.choices[0].message.content;
+  } catch (error) {
+    throw new Error(`DeepSeek API error: ${error.message}`);
+  }
+}
 
 app.post('/api/subscription/cancel', async (req, res) => {
   try {
@@ -601,16 +640,24 @@ app.post('/api/payment/create-subscription', async (req, res) => {
 });
 
 
-// Endpoint to process code with Gemini
+// Endpoint to process code with DeepSeek
 app.post('/api/process-code', async (req, res) => {
   try {
-    const { api_key, projectType, files, totalFiles, totalWords, workspacePath, dependencies, projectLanguage, packageJson } = req.body;
+    const { api_key, projectType, files, totalFiles, totalWords, workspacePath, dependencies, projectLanguage, packageJson, selectedModel } = req.body;
     
     // API key validation
     if (!api_key || typeof api_key !== 'string' || api_key.trim() === '') {
       return res.status(400).json({
         success: false,
         error: 'API key is required and must be a valid string'
+      });
+    }
+
+    // Validate selectedModel
+    if (!selectedModel || typeof selectedModel !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'selectedModel is required and must be a valid string'
       });
     }
 
@@ -624,6 +671,23 @@ app.post('/api/process-code', async (req, res) => {
         success: false,
         error: 'Invalid API key'
       });
+    }
+
+    // FOR FREE USERS: Check lifetime limit before processing
+    if (apiKeyData.users.plan === 'free') {
+      if (apiKeyData.count >= 3) {
+        return res.status(429).json({
+          success: false,
+          error: 'Free plan limit reached. You have used all 3 lifetime requests. Please upgrade to Pro plan for unlimited usage.',
+          data: {
+            count: apiKeyData.count,
+            limit: 3,
+            remaining: 0,
+            plan: 'free',
+            isLifetimeLimit: true
+          }
+        });
+      }
     }
 
     // USE THE POSTGRESQL FUNCTION FOR COUNT MANAGEMENT
@@ -650,8 +714,6 @@ app.post('/api/process-code', async (req, res) => {
       });
     }
 
-    // console.log(`API usage: ${apiKeyData.name} (${countResult.count}/${countResult.limit}) - Processing ${projectType} project`);
-
     // Validation for files...
     if (!files || !Array.isArray(files) || files.length === 0) {
       return res.status(400).json({
@@ -667,33 +729,24 @@ app.post('/api/process-code', async (req, res) => {
         error: 'Invalid input: packageJson is required and must be an object'
       });
     }
-
-    // console.log(`\nCOMPLETE REWRITE MODE: Processing ${projectType} project`);
-    // console.log(`Files to COMPLETELY REPLACE: ${files.length}`);
-    // console.log(`Total words: ${totalWords}`);
     
     // Create prompt for complete rewrite
-    const prompt = createGeminiPrompt(projectType, files, projectLanguage, packageJson);
+    const prompt = createRefactoringPrompt(projectType, files, projectLanguage, packageJson);
     
-    // Get Gemini response
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const generatedText = response.text();
-
-    // console.log('Received Gemini response for complete rewrite');
+    // Get DeepSeek response using the selected model
+    const deepseekResponse = await callDeepSeekAPI(prompt, selectedModel);
 
     // IMPROVED JSON PARSING WITH BETTER ERROR HANDLING
     let parsedResponse;
     try {
       // Log the raw response for debugging (truncated)
-      // console.log('Raw Gemini response (first 500 chars):', generatedText.substring(0, 500));
+      // console.log('Raw DeepSeek response (first 500 chars):', deepseekResponse.substring(0, 500));
       
       // Try multiple parsing strategies
       let jsonContent = '';
       
       // Strategy 1: Look for JSON block between ```json and ```
-      const codeBlockMatch = generatedText.match(/```json\s*([\s\S]*?)\s*```/);
+      const codeBlockMatch = deepseekResponse.match(/```json\s*([\s\S]*?)\s*```/);
       if (codeBlockMatch) {
         jsonContent = codeBlockMatch[1].trim();
         // console.log('Found JSON in code block');
@@ -701,7 +754,7 @@ app.post('/api/process-code', async (req, res) => {
       
       // Strategy 2: Look for JSON object starting with { and ending with }
       if (!jsonContent) {
-        const jsonMatch = generatedText.match(/\{[\s\S]*\}/);
+        const jsonMatch = deepseekResponse.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           jsonContent = jsonMatch[0];
           // console.log('Found JSON object in response');
@@ -710,8 +763,8 @@ app.post('/api/process-code', async (req, res) => {
       
       // Strategy 3: Try to clean the response and extract JSON
       if (!jsonContent) {
-        // Remove common prefixes/suffixes that Gemini might add
-        let cleaned = generatedText
+        // Remove common prefixes/suffixes that DeepSeek might add
+        let cleaned = deepseekResponse
           .replace(/^[\s\S]*?(?=\{)/, '') // Remove everything before first {
           .replace(/\}[\s\S]*$/, '}') // Remove everything after last }
           .trim();
@@ -728,18 +781,18 @@ app.post('/api/process-code', async (req, res) => {
         // console.log('Successfully parsed JSON response');
       } else {
         // If no JSON found, log the full response for debugging
-        console.error('No JSON content found in Gemini response');
-        console.error('Full response:', generatedText);
-        throw new Error('No valid JSON found in Gemini response');
+        console.error('No JSON content found in DeepSeek response');
+        console.error('Full response:', deepseekResponse);
+        throw new Error('No valid JSON found in DeepSeek response');
       }
       
     } catch (parseError) {
       console.error('JSON parsing failed:', parseError.message);
-      console.error('Raw response:', generatedText);
+      console.error('Raw response:', deepseekResponse);
       
       // Try one more fallback - attempt to fix common JSON issues
       try {
-        let fixedJson = generatedText
+        let fixedJson = deepseekResponse
           .replace(/^[\s\S]*?(\{)/, '$1') // Remove everything before first {
           .replace(/(\})[\s\S]*$/, '$1') // Remove everything after last }
           .replace(/,\s*}/g, '}') // Remove trailing commas
@@ -754,11 +807,11 @@ app.post('/api/process-code', async (req, res) => {
         // Return a structured error response instead of throwing
         return res.status(500).json({
           success: false,
-          error: 'Failed to parse Gemini AI response as JSON',
+          error: 'Failed to parse DeepSeek AI response as JSON',
           details: {
             originalError: parseError.message,
             fallbackError: fallbackError.message,
-            responsePreview: generatedText.substring(0, 200) + '...',
+            responsePreview: deepseekResponse.substring(0, 200) + '...',
             suggestion: 'The AI response format was unexpected. This might be a temporary issue. Please try again.'
           }
         });
@@ -770,7 +823,7 @@ app.post('/api/process-code', async (req, res) => {
       console.error('Parsed response is not an object:', parsedResponse);
       return res.status(500).json({
         success: false,
-        error: 'Invalid response structure from Gemini AI',
+        error: 'Invalid response structure from DeepSeek AI',
         details: 'Expected JSON object but got: ' + typeof parsedResponse
       });
     }
@@ -804,7 +857,8 @@ app.post('/api/process-code', async (req, res) => {
         projectLanguage: projectLanguage,
         processingTime: new Date().toISOString(),
         replacementMode: true,
-        apiKeyUser: apiKeyData.name
+        apiKeyUser: apiKeyData.name,
+        selectedModel: selectedModel
       }
     });
 
@@ -818,7 +872,6 @@ app.post('/api/process-code', async (req, res) => {
     });
   }
 });
-
 
 app.post('/api/generate-api-key', async (req, res) => {
   try {
@@ -862,7 +915,7 @@ app.post('/api/generate-api-key', async (req, res) => {
     // Check if API key already exists for this user
     const { data: existingApiKey, error: apiKeyCheckError } = await supabase
       .from('api_keys')
-      .select('name, api_key, count, last_reset_date') // ✅ GET EXISTING COUNT AND RESET DATE
+      .select('name, api_key, count, last_reset_date')
       .eq('name', userName)
       .single();
 
@@ -884,36 +937,46 @@ app.post('/api/generate-api-key', async (req, res) => {
     // Hash the API key before storing
     const hashedApiKey = await hashApiKey(newApiKey);
 
-    // ✅ PRESERVE COUNT AND RESET DATE LOGIC
+    // ✅ FOR FREE USERS: PRESERVE COUNT (NO RESET LOGIC)
+    // ✅ FOR PRO USERS: PRESERVE EXISTING RESET LOGIC
     let preservedCount = 0;
     let preservedResetDate = new Date().toISOString().split('T')[0];
     
     if (existingApiKey) {
-      // If user had a deleted key, preserve their usage for today
-      const today = new Date().toISOString().split('T')[0];
+      const userPlan = existingUser?.plan || 'free';
       
-      if (existingApiKey.last_reset_date === today) {
-        // Same day - preserve the count to maintain daily limit
+      if (userPlan === 'free') {
+        // FREE USERS: Always preserve count (no daily reset)
         preservedCount = existingApiKey.count;
         preservedResetDate = existingApiKey.last_reset_date;
-        // console.log(`✅ Preserving count ${preservedCount} for user ${userName} (same day)`);
+        // console.log(`✅ FREE USER: Preserving lifetime count ${preservedCount} for user ${userName}`);
       } else {
-        // Different day - reset count to 0 (normal daily reset)
-        preservedCount = 0;
-        preservedResetDate = today;
-        // console.log(`✅ Resetting count for user ${userName} (new day)`);
+        // PRO USERS: Keep existing daily reset logic
+        const today = new Date().toISOString().split('T')[0];
+        
+        if (existingApiKey.last_reset_date === today) {
+          // Same day - preserve the count to maintain daily limit
+          preservedCount = existingApiKey.count;
+          preservedResetDate = existingApiKey.last_reset_date;
+          // console.log(`✅ PRO USER: Preserving count ${preservedCount} for user ${userName} (same day)`);
+        } else {
+          // Different day - reset count to 0 (normal daily reset)
+          preservedCount = 0;
+          preservedResetDate = today;
+          // console.log(`✅ PRO USER: Resetting count for user ${userName} (new day)`);
+        }
       }
     }
 
     // Insert or update API key record with preserved count
     if (existingApiKey) {
-      // Update existing record - PRESERVE COUNT
+      // Update existing record
       const { error: updateError } = await supabase
         .from('api_keys')
         .update({
           api_key: hashedApiKey,
-          count: preservedCount,          // ✅ PRESERVE EXISTING COUNT
-          last_reset_date: preservedResetDate  // ✅ PRESERVE RESET DATE
+          count: preservedCount,
+          last_reset_date: preservedResetDate
         })
         .eq('name', userName);
 
@@ -945,8 +1008,8 @@ app.post('/api/generate-api-key', async (req, res) => {
         name: userName,
         api_key: newApiKey, // Return the plain API key to user
         plan: existingUser?.plan || 'free',
-        count: preservedCount,  // ✅ SHOW PRESERVED COUNT
-        preserved_usage: preservedCount > 0 // ✅ INDICATE IF USAGE WAS PRESERVED
+        count: preservedCount,
+        preserved_usage: preservedCount > 0
       }
     });
 
@@ -1032,7 +1095,6 @@ app.post('/api/delete-api-key', async (req, res) => {
 });
 
 // Route 3: Update Count (Increment by 1)
-// Route 3: Update Count (Increment by 1)
 app.post('/api/update-count', async (req, res) => {
   try {
     const { api_key } = req.body;
@@ -1054,6 +1116,21 @@ app.post('/api/update-count', async (req, res) => {
       return res.status(401).json({
         success: false,
         error: 'Invalid API key'
+      });
+    }
+
+    // FOR FREE USERS: Check if they've reached lifetime limit
+    if (apiKeyData.users.plan === 'free' && apiKeyData.count >= 3) {
+      return res.status(429).json({
+        success: false,
+        error: 'Free plan limit reached. You have used all 3 lifetime requests. Please upgrade to Pro plan.',
+        data: {
+          count: apiKeyData.count,
+          limit: 3,
+          remaining: 0,
+          plan: 'free',
+          isLifetimeLimit: true
+        }
       });
     }
 
@@ -1166,12 +1243,18 @@ app.post('/api/get-user-api-info', async (req, res) => {
     }
 
     const limit = planLimit.limit_value;
-    const today = new Date().toISOString().split('T')[0];
     let currentCount = apiKeyData.count;
 
-    // Check if count needs to be reset for today
-    if (apiKeyData.last_reset_date !== today) {
-      currentCount = 0;
+    // ✅ MODIFIED LOGIC: For free users, no daily reset
+    if (apiKeyData.users.plan === 'free') {
+      // Free users: count never resets, use lifetime count
+      currentCount = apiKeyData.count;
+    } else {
+      // Pro users: check if count needs to be reset for today
+      const today = new Date().toISOString().split('T')[0];
+      if (apiKeyData.last_reset_date !== today) {
+        currentCount = 0;
+      }
     }
 
     // console.log(`📊 Retrieved API info for user: ${userName}`);
@@ -1188,11 +1271,12 @@ app.post('/api/get-user-api-info', async (req, res) => {
         count: currentCount,
         remaining: limit - currentCount,
         plan: apiKeyData.users.plan,
-        subscription_status: apiKeyData.users.subscription_status, // ADD THIS
-        subscription_id: apiKeyData.users.subscription_id, // ADD THIS
+        subscription_status: apiKeyData.users.subscription_status,
+        subscription_id: apiKeyData.users.subscription_id,
         last_reset_date: apiKeyData.last_reset_date,
         created_at: apiKeyData.created_at,
-        is_limit_reached: currentCount >= limit
+        is_limit_reached: currentCount >= limit,
+        isLifetimeLimit: apiKeyData.users.plan === 'free' // Add this flag for frontend
       }
     });
 
@@ -1271,6 +1355,7 @@ app.get('/api/check-user-limit', async (req, res) => {
     });
   }
 });
+
 // Route to handle user authentication and database operations
 app.post('/api/handle-user-auth', async (req, res) => {
   try {
@@ -1421,7 +1506,7 @@ app.get('/api/health', (req, res) => {
 
 
 
-function createGeminiPrompt(projectType, files, projectLanguage, packageJson) {
+function createRefactoringPrompt(projectType, files, projectLanguage, packageJson) {
   const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
   
   const refactoringPrompt = `You are an expert software refactoring assistant. You will COMPLETELY REWRITE all provided files with improved code.
