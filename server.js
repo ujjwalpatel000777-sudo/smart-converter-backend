@@ -25,9 +25,10 @@ const supabaseServiceRole = process.env.SUPABASE_SERVICE_ROLE
 const supabase = createClient(supabaseUrl, supabaseServiceRole);
 
 // Initialize deepseek AI
-const deepseekClient = new OpenAI({
-  baseURL: 'https://api.deepseek.com',
-  apiKey: process.env.DEEPSEEK_API_KEY
+// Initialize OpenRouter client
+const openrouterClient = new OpenAI({
+  baseURL: "https://openrouter.ai/api/v1",
+  apiKey: process.env.OPENROUTER_API_KEY,
 });
 // Middleware
 app.use(cors());
@@ -327,22 +328,9 @@ async function handleSubscriptionResumed(subscription) {
   }
 }
 async function callDeepSeekAPI(prompt, model) {
-  // Map custom model names to DeepSeek API models
-  let deepseekModel;
-  switch(model) {
-    case 'DeepSeek-R1-0528':
-    case 'DeepSeek-V3.1-thinking':
-      deepseekModel = 'deepseek-reasoner'; // thinking mode
-      break;
-    case 'DeepSeek-V3.1':
-    default:
-      deepseekModel = 'deepseek-chat'; // non-thinking mode
-      break;
-  }
-
   try {
-    const completion = await deepseekClient.chat.completions.create({
-      model: deepseekModel,
+    const completion = await openrouterClient.chat.completions.create({
+      model: "deepseek/deepseek-r1:free", // Hardcoded model
       messages: [
         {
           role: 'system',
@@ -359,7 +347,7 @@ async function callDeepSeekAPI(prompt, model) {
 
     return completion.choices[0].message.content;
   } catch (error) {
-    throw new Error(`DeepSeek API error: ${error.message}`);
+    throw new Error(`OpenRouter API error: ${error.message}`);
   }
 }
 
