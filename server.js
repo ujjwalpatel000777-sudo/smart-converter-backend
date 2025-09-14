@@ -28,7 +28,7 @@ const supabase = createClient(supabaseUrl, supabaseServiceRole);
 // Initialize OpenRouter client
 const openrouterClient = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
-  apiKey: process.env.OPENROUTER_API_KEY,
+  apiKey: process.env.DEEPSEEK_API_KEY,
 });
 // Middleware
 app.use(cors());
