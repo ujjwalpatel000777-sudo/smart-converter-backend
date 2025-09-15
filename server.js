@@ -327,7 +327,213 @@ async function handleSubscriptionResumed(subscription) {
     console.log('SUCCESS: Subscription resumed for subscription:', subscription.id);
   }
 }
-async function callDeepSeekAPI(prompt, model) {
+
+function createRefactoringPrompt(projectType, files, projectLanguage, packageJson) {
+  const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
+  
+  const refactoringPrompt = `You are an expert software refactoring assistant. You will COMPLETELY REWRITE all provided files with improved code.
+
+  **IMPORTANT PROJECT SETTINGS:**
+  - Project Type: ${projectType}
+  - Language: ${projectLanguage}
+  - Use ${fileExtension} file extensions
+  - Follow ${projectLanguage} best practices and syntax
+  
+  **PACKAGE.JSON ANALYSIS:**
+  Current package.json content:
+  ${JSON.stringify(packageJson, null, 2)}
+  
+  **UNUSED PACKAGE DETECTION INSTRUCTIONS:**
+  Analyze all provided code files against the package.json dependencies and devDependencies to identify unused packages.
+  
+  **ESSENTIAL PACKAGES TO NEVER REMOVE (even if seemingly unused):**
+  - react, react-dom, @types/react, @types/react-dom (React core)
+  - next, @types/next (Next.js framework)
+  - typescript (TypeScript compiler)
+  - eslint, @typescript-eslint/*, eslint-* (linting)
+  - prettier (code formatting)
+  - tailwindcss, autoprefixer, postcss (CSS processing)
+  - webpack, @babel/*, babel-* (build tools)
+  - jest, @testing-library/*, @types/jest (testing frameworks)
+  - @types/node (Node.js types)
+  - turbo, lerna (monorepo tools)
+  - husky, lint-staged (git hooks)
+  
+  **PACKAGE USAGE DETECTION:**
+  Look for packages being used in:
+  1. Direct imports: import x from 'package-name'
+  2. Require statements: require('package-name')
+  3. Dynamic imports: import('package-name')
+  4. Configuration files that reference packages
+  5. Package.json scripts that use packages
+  6. Indirect dependencies (packages used by other packages)
+  7. Development tools used in build process
+  
+  **CONSERVATIVE APPROACH:**
+  - Only suggest removing packages that are clearly unused
+  - When in doubt, keep the package
+  - Group related packages together in uninstall commands
+  - Provide clear reasoning for why each package can be removed
+  
+  **SECURITY ANALYSIS - EXTRACT HARDCODED SECRETS:**
+  Analyze all code files and identify any hardcoded secrets, API keys, tokens, or sensitive data.
+  Look for patterns like:
+  - API keys (starting with sk-, pk-, etc.)
+  - Database URLs with credentials
+  - JWT tokens
+  - OAuth secrets
+  - Third-party service tokens
+  - Email/SMTP credentials
+  - Any hardcoded passwords or secrets
+  
+  **COMPLETE REWRITE INSTRUCTIONS:**
+  
+  🔄 **TOTAL REPLACEMENT APPROACH:**
+  - All provided files will be DELETED and RECREATED from scratch
+  - You must provide COMPLETE, WORKING code for every file
+  - Maintain ALL existing functionality while improving code quality
+  - Create additional utility/helper files as needed
+  - Replace ALL hardcoded secrets with process.env variables
+  
+  **Refactoring Rules to Apply:**
+  
+  1. **Security First:** 
+     - Replace ALL hardcoded secrets with process.env.VARIABLE_NAME
+     - Use descriptive environment variable names
+  
+  2. **Naming Conventions:** 
+     - Use camelCase for variables and functions
+     - Use PascalCase for classes and components
+     - Use UPPER_SNAKE_CASE for constants and env vars
+  
+  3. **Modularization:** 
+     - Break large functions (>50 lines) into smaller functions
+     - Extract reusable logic into separate utility files
+     - Create shared components for repeated UI patterns
+  
+  4. **Code Organization:**
+     - Create proper file structure (utils/, components/, constants/)
+     - Extract constants and configuration into separate files
+     - Group related functions into modules
+
+  5. **DEAD CODE AND IMPORT REMOVAL:**
+     - **Unused Functions**: Identify and remove functions that are defined but never called
+     - **Unused Variables**: Remove variables that are declared but never used
+     - **Unused Parameters**: Remove function parameters that aren't used in function body
+     - **Unused Imports**: Remove all imports that aren't actually used in the file
+     - **Unused Exports**: Remove exports that aren't imported by any other file
+     - **Unused Hooks**: Detect and remove unused React hooks such as useState, useEffect, useRef, etc., that are declared but not used in functional components.
+     - **Import Consolidation**: Combine multiple imports from same module
+
+  6. **Modern Best Practices:**
+     ${projectLanguage === 'TypeScript' ? `
+     - Add comprehensive TypeScript types and interfaces
+     - Use proper generics and utility types
+     - Implement strict null checks
+     - Add JSDoc comments for all public APIs
+     ` : `
+     - Use modern JavaScript features (destructuring, arrow functions)
+     - Add comprehensive JSDoc comments
+     - Implement proper error handling
+     `}
+  
+  7. **Framework-Specific (${projectType}):**
+     - Use modern React hooks instead of class components
+     - Implement proper component structure
+     - Follow React/Next.js best practices
+     - Optimize performance with useMemo, useCallback where needed
+  
+  8. **Code Documentation:**
+     - Add comprehensive JSDoc comments
+     - Document all function parameters and return values
+     - Add inline comments for complex logic
+  
+  **FILE STRUCTURE REQUIREMENTS:**
+  - Include ALL original files (completely rewritten)
+  - Create NEW files for extracted utilities/components
+  - Use logical directory structure
+  - Update ALL import/export statements to work with new structure
+  
+  **ORIGINAL FILES TO COMPLETELY REWRITE:**
+  ${JSON.stringify({ files }, null, 2)}
+  
+  **RESPONSE FORMAT (CRITICAL - MUST BE EXACT JSON):**
+  
+  {
+    "projectType": "${projectType}",
+    "language": "${projectLanguage}",
+    "timestamp": "ISO_DATE_STRING",
+    "totalFiles": number,
+    "totalWords": number,
+    "changes_summary": "Comprehensive description of all improvements made",
+    "secrets": {
+      "API_KEY": "actual-hardcoded-value-found",
+      "DATABASE_URL": "actual-db-url-with-credentials",
+      "JWT_SECRET": "actual-jwt-token"
+    },
+    "packageAnalysis": {
+      "totalDependencies": number,
+      "totalDevDependencies": number,
+      "unusedPackagesFound": number,
+      "essentialPackagesKept": number
+    },
+    "unusedPackages": [
+      {
+        "name": "package-name-1",
+        "type": "dependency",
+        "reason": "Not imported or used anywhere in the codebase"
+      },
+      {
+        "name": "package-name-2", 
+        "type": "devDependency",
+        "reason": "Development tool no longer needed after refactoring"
+      }
+    ],
+    "npmUninstallCommands": [
+      "npm uninstall package-name-1 package-name-2",
+      "npm uninstall --save-dev dev-package-name"
+    ],
+    "originalFilesToDelete": [
+      ${files.map(f => `"${f.path}"`).join(',\n      ')}
+    ],
+    "files": [
+      {
+        "path": "relative/path/to/file${fileExtension}",
+        "content": "COMPLETE_REWRITTEN_CODE_CONTENT",
+        "isNew": true_if_new_file_false_if_replacing_original,
+        "isRewritten": true_for_completely_rewritten_files,
+        "changes": "Detailed description of improvements made to this file"
+      }
+    ],
+    "additionalFilesToDelete": [
+      "any/other/obsolete/files.js"
+    ]
+  }
+  
+  **CRITICAL SUCCESS REQUIREMENTS:**
+  ✅ ALL files must contain COMPLETE, WORKING, PRODUCTION-READY code
+  ✅ ZERO placeholders, TODO comments, or incomplete functions
+  ✅ ALL functionality from original files must be preserved
+  ✅ All import statements must reference correct file paths
+  ✅ Code must follow ${projectLanguage} syntax perfectly
+  ✅ Response must be valid JSON with exact structure above
+  ✅ Extract ALL hardcoded secrets into the "secrets" object
+  ✅ Replace hardcoded values with process.env variables in code
+  ✅ Provide conservative unused package analysis with clear reasoning
+  ✅ Group npm uninstall commands logically for easy execution
+  
+  **FAILURE CONDITIONS TO AVOID:**
+  ❌ No incomplete code or placeholder comments
+  ❌ No missing imports or broken references
+  ❌ No syntax errors or compilation issues
+  ❌ No functionality loss from original code
+  ❌ No missed hardcoded secrets
+  ❌ No removal of essential packages
+  ❌ No unclear reasoning for package removal suggestions`;
+
+  return refactoringPrompt;
+}
+async function callDeepSeekAPI(prompt, model, res) {
   try {
     const completion = await openrouterClient.chat.completions.create({
       model: "deepseek/deepseek-r1:free", // Hardcoded model
@@ -342,15 +548,346 @@ async function callDeepSeekAPI(prompt, model) {
         }
       ],
       temperature: 0.0, // Best for coding tasks
-      stream: false
+      stream: true // Enable streaming
     });
 
-    return completion.choices[0].message.content;
+    let fullResponse = '';
+
+    // Stream the response
+    for await (const chunk of completion) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      
+      if (content) {
+        fullResponse += content;
+        
+        // Send streaming chunk to frontend
+        res.write(`data: ${JSON.stringify({ 
+          type: 'chunk', 
+          content: content,
+          timestamp: new Date().toISOString()
+        })}\n\n`);
+      }
+    }
+
+    return fullResponse;
   } catch (error) {
     throw new Error(`OpenRouter API error: ${error.message}`);
   }
 }
 
+// Endpoint to process code with DeepSeek
+app.post('/api/process-code', async (req, res) => {
+  try {
+    const { api_key, projectType, files, totalFiles, totalWords, workspacePath, dependencies, projectLanguage, packageJson, selectedModel } = req.body;
+    
+    // Set up Server-Sent Events headers
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Cache-Control'
+    });
+
+    // Send initial connection message
+    res.write(`data: ${JSON.stringify({ 
+      type: 'connected', 
+      message: 'Stream connected successfully',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    // API key validation
+    if (!api_key || typeof api_key !== 'string' || api_key.trim() === '') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'API key is required and must be a valid string'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Validate selectedModel
+    if (!selectedModel || typeof selectedModel !== 'string') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'selectedModel is required and must be a valid string'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    const apiKey = api_key.trim();
+
+    // Send processing status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: 'Validating API key...',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    // Find the API key and associated user (using hash comparison)
+    const apiKeyData = await findApiKeyRecord(apiKey);
+    
+    if (!apiKeyData) {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'Invalid API key'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Send processing status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: 'Checking usage limits...',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    // FOR FREE USERS: Check lifetime limit before processing
+    if (apiKeyData.users.plan === 'free') {
+      if (apiKeyData.count >= 3) {
+        res.write(`data: ${JSON.stringify({
+          type: 'error',
+          error: 'Free plan limit reached. You have used all 3 lifetime requests. Please upgrade to Pro plan for unlimited usage.',
+          data: {
+            count: apiKeyData.count,
+            limit: 3,
+            remaining: 0,
+            plan: 'free',
+            isLifetimeLimit: true
+          }
+        })}\n\n`);
+        res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+        res.end();
+        return;
+      }
+    }
+
+    // USE THE POSTGRESQL FUNCTION FOR COUNT MANAGEMENT
+    const { data: countResult, error: countError } = await supabase
+      .rpc('increment_api_count', {
+        api_name: apiKeyData.name
+      });
+
+    if (countError) {
+      throw countError;
+    }
+
+    // Check if the function indicates limit reached or other error
+    if (!countResult.success) {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: countResult.error,
+        data: {
+          count: countResult.count,
+          limit: countResult.limit,
+          remaining: countResult.limit - countResult.count,
+          plan: apiKeyData.users.plan
+        }
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Validation for files...
+    if (!files || !Array.isArray(files) || files.length === 0) {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'Invalid input: files array is required and cannot be empty'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Validation for packageJson
+    if (!packageJson || typeof packageJson !== 'object') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'Invalid input: packageJson is required and must be an object'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Send processing status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: 'Creating refactoring prompt...',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+    
+    // Create prompt for complete rewrite
+    const prompt = createRefactoringPrompt(projectType, files, projectLanguage, packageJson);
+
+    // Send processing status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: 'Starting AI processing with streaming...',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+    
+    // Get DeepSeek response using the selected model (with streaming)
+    const deepseekResponse = await callDeepSeekAPI(prompt, selectedModel, res);
+
+    // Send processing status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: 'AI processing completed. Parsing response...',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    // IMPROVED JSON PARSING WITH BETTER ERROR HANDLING (same as original)
+    let parsedResponse;
+    try {
+      // Try multiple parsing strategies
+      let jsonContent = '';
+      
+      // Strategy 1: Look for JSON block between ```json and ```
+      const codeBlockMatch = deepseekResponse.match(/```json\s*([\s\S]*?)\s*```/);
+      if (codeBlockMatch) {
+        jsonContent = codeBlockMatch[1].trim();
+      }
+      
+      // Strategy 2: Look for JSON object starting with { and ending with }
+      if (!jsonContent) {
+        const jsonMatch = deepseekResponse.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          jsonContent = jsonMatch[0];
+        }
+      }
+      
+      // Strategy 3: Try to clean the response and extract JSON
+      if (!jsonContent) {
+        let cleaned = deepseekResponse
+          .replace(/^[\s\S]*?(?=\{)/, '') // Remove everything before first {
+          .replace(/\}[\s\S]*$/, '}') // Remove everything after last }
+          .trim();
+        
+        if (cleaned.startsWith('{') && cleaned.endsWith('}')) {
+          jsonContent = cleaned;
+        }
+      }
+      
+      // If we found JSON content, try to parse it
+      if (jsonContent) {
+        parsedResponse = JSON.parse(jsonContent);
+      } else {
+        console.error('No JSON content found in DeepSeek response');
+        console.error('Full response:', deepseekResponse);
+        throw new Error('No valid JSON found in DeepSeek response');
+      }
+      
+    } catch (parseError) {
+      console.error('JSON parsing failed:', parseError.message);
+      console.error('Raw response:', deepseekResponse);
+      
+      // Try one more fallback - attempt to fix common JSON issues
+      try {
+        let fixedJson = deepseekResponse
+          .replace(/^[\s\S]*?(\{)/, '$1') // Remove everything before first {
+          .replace(/(\})[\s\S]*$/, '$1') // Remove everything after last }
+          .replace(/,\s*}/g, '}') // Remove trailing commas
+          .replace(/,\s*]/g, ']') // Remove trailing commas in arrays
+          .trim();
+        
+        parsedResponse = JSON.parse(fixedJson);
+      } catch (fallbackError) {
+        console.error('Fallback parsing also failed:', fallbackError.message);
+        
+        // Send error via stream and end
+        res.write(`data: ${JSON.stringify({
+          type: 'error',
+          error: 'Failed to parse DeepSeek AI response as JSON',
+          details: {
+            originalError: parseError.message,
+            fallbackError: fallbackError.message,
+            responsePreview: deepseekResponse.substring(0, 200) + '...',
+            suggestion: 'The AI response format was unexpected. This might be a temporary issue. Please try again.'
+          }
+        })}\n\n`);
+        res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+        res.end();
+        return;
+      }
+    }
+
+    // Validate that we have the expected structure
+    if (!parsedResponse || typeof parsedResponse !== 'object') {
+      console.error('Parsed response is not an object:', parsedResponse);
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'Invalid response structure from DeepSeek AI',
+        details: 'Expected JSON object but got: ' + typeof parsedResponse
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Validate required fields
+    if (!parsedResponse.files || !Array.isArray(parsedResponse.files)) {
+      console.warn('Response missing files array, creating empty array');
+      parsedResponse.files = [];
+    }
+
+    // Send final parsed response
+    res.write(`data: ${JSON.stringify({
+      type: 'final',
+      success: true,
+      data: {
+        ...parsedResponse,
+        replacementMode: true,
+        originalFilesProcessed: files.length,
+        usage: {
+          count: countResult.count,
+          limit: countResult.limit,
+          remaining: countResult.remaining,
+          plan: apiKeyData.users.plan
+        }
+      },
+      metadata: {
+        originalProjectType: projectType,
+        originalTotalFiles: totalFiles,
+        originalTotalWords: totalWords,
+        projectLanguage: projectLanguage,
+        processingTime: new Date().toISOString(),
+        replacementMode: true,
+        apiKeyUser: apiKeyData.name,
+        selectedModel: selectedModel
+      }
+    })}\n\n`);
+
+    // Send completion message
+    res.write(`data: ${JSON.stringify({ 
+      type: 'complete', 
+      message: 'Processing completed successfully',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+    
+    res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+    res.end();
+
+  } catch (error) {
+    console.error('Error in complete replacement mode:', error);
+    
+    // Send error via stream
+    res.write(`data: ${JSON.stringify({
+      type: 'error',
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    })}\n\n`);
+    
+    res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+    res.end();
+  }
+});
 app.post('/api/subscription/cancel', async (req, res) => {
   try {
     const { userName } = req.body;
@@ -628,238 +1165,7 @@ app.post('/api/payment/create-subscription', async (req, res) => {
 });
 
 
-// Endpoint to process code with DeepSeek
-app.post('/api/process-code', async (req, res) => {
-  try {
-    const { api_key, projectType, files, totalFiles, totalWords, workspacePath, dependencies, projectLanguage, packageJson, selectedModel } = req.body;
-    
-    // API key validation
-    if (!api_key || typeof api_key !== 'string' || api_key.trim() === '') {
-      return res.status(400).json({
-        success: false,
-        error: 'API key is required and must be a valid string'
-      });
-    }
 
-    // Validate selectedModel
-    if (!selectedModel || typeof selectedModel !== 'string') {
-      return res.status(400).json({
-        success: false,
-        error: 'selectedModel is required and must be a valid string'
-      });
-    }
-
-    const apiKey = api_key.trim();
-
-    // Find the API key and associated user (using hash comparison)
-    const apiKeyData = await findApiKeyRecord(apiKey);
-    
-    if (!apiKeyData) {
-      return res.status(401).json({
-        success: false,
-        error: 'Invalid API key'
-      });
-    }
-
-    // FOR FREE USERS: Check lifetime limit before processing
-    if (apiKeyData.users.plan === 'free') {
-      if (apiKeyData.count >= 3) {
-        return res.status(429).json({
-          success: false,
-          error: 'Free plan limit reached. You have used all 3 lifetime requests. Please upgrade to Pro plan for unlimited usage.',
-          data: {
-            count: apiKeyData.count,
-            limit: 3,
-            remaining: 0,
-            plan: 'free',
-            isLifetimeLimit: true
-          }
-        });
-      }
-    }
-
-    // USE THE POSTGRESQL FUNCTION FOR COUNT MANAGEMENT
-    const { data: countResult, error: countError } = await supabase
-      .rpc('increment_api_count', {
-        api_name: apiKeyData.name
-      });
-
-    if (countError) {
-      throw countError;
-    }
-
-    // Check if the function indicates limit reached or other error
-    if (!countResult.success) {
-      return res.status(429).json({
-        success: false,
-        error: countResult.error,
-        data: {
-          count: countResult.count,
-          limit: countResult.limit,
-          remaining: countResult.limit - countResult.count,
-          plan: apiKeyData.users.plan
-        }
-      });
-    }
-
-    // Validation for files...
-    if (!files || !Array.isArray(files) || files.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid input: files array is required and cannot be empty'
-      });
-    }
-
-    // Validation for packageJson
-    if (!packageJson || typeof packageJson !== 'object') {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid input: packageJson is required and must be an object'
-      });
-    }
-    
-    // Create prompt for complete rewrite
-    const prompt = createRefactoringPrompt(projectType, files, projectLanguage, packageJson);
-    
-    // Get DeepSeek response using the selected model
-    const deepseekResponse = await callDeepSeekAPI(prompt, selectedModel);
-
-    // IMPROVED JSON PARSING WITH BETTER ERROR HANDLING
-    let parsedResponse;
-    try {
-      // Log the raw response for debugging (truncated)
-      // console.log('Raw DeepSeek response (first 500 chars):', deepseekResponse.substring(0, 500));
-      
-      // Try multiple parsing strategies
-      let jsonContent = '';
-      
-      // Strategy 1: Look for JSON block between ```json and ```
-      const codeBlockMatch = deepseekResponse.match(/```json\s*([\s\S]*?)\s*```/);
-      if (codeBlockMatch) {
-        jsonContent = codeBlockMatch[1].trim();
-        // console.log('Found JSON in code block');
-      }
-      
-      // Strategy 2: Look for JSON object starting with { and ending with }
-      if (!jsonContent) {
-        const jsonMatch = deepseekResponse.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          jsonContent = jsonMatch[0];
-          // console.log('Found JSON object in response');
-        }
-      }
-      
-      // Strategy 3: Try to clean the response and extract JSON
-      if (!jsonContent) {
-        // Remove common prefixes/suffixes that DeepSeek might add
-        let cleaned = deepseekResponse
-          .replace(/^[\s\S]*?(?=\{)/, '') // Remove everything before first {
-          .replace(/\}[\s\S]*$/, '}') // Remove everything after last }
-          .trim();
-        
-        if (cleaned.startsWith('{') && cleaned.endsWith('}')) {
-          jsonContent = cleaned;
-          // console.log('Extracted JSON from cleaned response');
-        }
-      }
-      
-      // If we found JSON content, try to parse it
-      if (jsonContent) {
-        parsedResponse = JSON.parse(jsonContent);
-        // console.log('Successfully parsed JSON response');
-      } else {
-        // If no JSON found, log the full response for debugging
-        console.error('No JSON content found in DeepSeek response');
-        console.error('Full response:', deepseekResponse);
-        throw new Error('No valid JSON found in DeepSeek response');
-      }
-      
-    } catch (parseError) {
-      console.error('JSON parsing failed:', parseError.message);
-      console.error('Raw response:', deepseekResponse);
-      
-      // Try one more fallback - attempt to fix common JSON issues
-      try {
-        let fixedJson = deepseekResponse
-          .replace(/^[\s\S]*?(\{)/, '$1') // Remove everything before first {
-          .replace(/(\})[\s\S]*$/, '$1') // Remove everything after last }
-          .replace(/,\s*}/g, '}') // Remove trailing commas
-          .replace(/,\s*]/g, ']') // Remove trailing commas in arrays
-          .trim();
-        
-        parsedResponse = JSON.parse(fixedJson);
-        // console.log('Successfully parsed JSON after cleanup');
-      } catch (fallbackError) {
-        console.error('Fallback parsing also failed:', fallbackError.message);
-        
-        // Return a structured error response instead of throwing
-        return res.status(500).json({
-          success: false,
-          error: 'Failed to parse DeepSeek AI response as JSON',
-          details: {
-            originalError: parseError.message,
-            fallbackError: fallbackError.message,
-            responsePreview: deepseekResponse.substring(0, 200) + '...',
-            suggestion: 'The AI response format was unexpected. This might be a temporary issue. Please try again.'
-          }
-        });
-      }
-    }
-
-    // Validate that we have the expected structure
-    if (!parsedResponse || typeof parsedResponse !== 'object') {
-      console.error('Parsed response is not an object:', parsedResponse);
-      return res.status(500).json({
-        success: false,
-        error: 'Invalid response structure from DeepSeek AI',
-        details: 'Expected JSON object but got: ' + typeof parsedResponse
-      });
-    }
-
-    // Validate required fields
-    if (!parsedResponse.files || !Array.isArray(parsedResponse.files)) {
-      console.warn('Response missing files array, creating empty array');
-      parsedResponse.files = [];
-    }
-
-    // console.log(`Parsed response contains ${parsedResponse.files.length} files`);
-
-    // Send response back to extension (NO FILE OPERATIONS)
-    res.json({
-      success: true,
-      data: {
-        ...parsedResponse,
-        replacementMode: true,
-        originalFilesProcessed: files.length,
-        usage: {
-          count: countResult.count,
-          limit: countResult.limit,
-          remaining: countResult.remaining,
-          plan: apiKeyData.users.plan
-        }
-      },
-      metadata: {
-        originalProjectType: projectType,
-        originalTotalFiles: totalFiles,
-        originalTotalWords: totalWords,
-        projectLanguage: projectLanguage,
-        processingTime: new Date().toISOString(),
-        replacementMode: true,
-        apiKeyUser: apiKeyData.name,
-        selectedModel: selectedModel
-      }
-    });
-
-  } catch (error) {
-    console.error('Error in complete replacement mode:', error);
-    
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-});
 
 app.post('/api/generate-api-key', async (req, res) => {
   try {
@@ -1494,211 +1800,7 @@ app.get('/api/health', (req, res) => {
 
 
 
-function createRefactoringPrompt(projectType, files, projectLanguage, packageJson) {
-  const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
-  
-  const refactoringPrompt = `You are an expert software refactoring assistant. You will COMPLETELY REWRITE all provided files with improved code.
 
-  **IMPORTANT PROJECT SETTINGS:**
-  - Project Type: ${projectType}
-  - Language: ${projectLanguage}
-  - Use ${fileExtension} file extensions
-  - Follow ${projectLanguage} best practices and syntax
-  
-  **PACKAGE.JSON ANALYSIS:**
-  Current package.json content:
-  ${JSON.stringify(packageJson, null, 2)}
-  
-  **UNUSED PACKAGE DETECTION INSTRUCTIONS:**
-  Analyze all provided code files against the package.json dependencies and devDependencies to identify unused packages.
-  
-  **ESSENTIAL PACKAGES TO NEVER REMOVE (even if seemingly unused):**
-  - react, react-dom, @types/react, @types/react-dom (React core)
-  - next, @types/next (Next.js framework)
-  - typescript (TypeScript compiler)
-  - eslint, @typescript-eslint/*, eslint-* (linting)
-  - prettier (code formatting)
-  - tailwindcss, autoprefixer, postcss (CSS processing)
-  - webpack, @babel/*, babel-* (build tools)
-  - jest, @testing-library/*, @types/jest (testing frameworks)
-  - @types/node (Node.js types)
-  - turbo, lerna (monorepo tools)
-  - husky, lint-staged (git hooks)
-  
-  **PACKAGE USAGE DETECTION:**
-  Look for packages being used in:
-  1. Direct imports: import x from 'package-name'
-  2. Require statements: require('package-name')
-  3. Dynamic imports: import('package-name')
-  4. Configuration files that reference packages
-  5. Package.json scripts that use packages
-  6. Indirect dependencies (packages used by other packages)
-  7. Development tools used in build process
-  
-  **CONSERVATIVE APPROACH:**
-  - Only suggest removing packages that are clearly unused
-  - When in doubt, keep the package
-  - Group related packages together in uninstall commands
-  - Provide clear reasoning for why each package can be removed
-  
-  **SECURITY ANALYSIS - EXTRACT HARDCODED SECRETS:**
-  Analyze all code files and identify any hardcoded secrets, API keys, tokens, or sensitive data.
-  Look for patterns like:
-  - API keys (starting with sk-, pk-, etc.)
-  - Database URLs with credentials
-  - JWT tokens
-  - OAuth secrets
-  - Third-party service tokens
-  - Email/SMTP credentials
-  - Any hardcoded passwords or secrets
-  
-  **COMPLETE REWRITE INSTRUCTIONS:**
-  
-  🔄 **TOTAL REPLACEMENT APPROACH:**
-  - All provided files will be DELETED and RECREATED from scratch
-  - You must provide COMPLETE, WORKING code for every file
-  - Maintain ALL existing functionality while improving code quality
-  - Create additional utility/helper files as needed
-  - Replace ALL hardcoded secrets with process.env variables
-  
-  **Refactoring Rules to Apply:**
-  
-  1. **Security First:** 
-     - Replace ALL hardcoded secrets with process.env.VARIABLE_NAME
-     - Use descriptive environment variable names
-  
-  2. **Naming Conventions:** 
-     - Use camelCase for variables and functions
-     - Use PascalCase for classes and components
-     - Use UPPER_SNAKE_CASE for constants and env vars
-  
-  3. **Modularization:** 
-     - Break large functions (>50 lines) into smaller functions
-     - Extract reusable logic into separate utility files
-     - Create shared components for repeated UI patterns
-  
-  4. **Code Organization:**
-     - Create proper file structure (utils/, components/, constants/)
-     - Extract constants and configuration into separate files
-     - Group related functions into modules
-
-  5. **DEAD CODE AND IMPORT REMOVAL:**
-     - **Unused Functions**: Identify and remove functions that are defined but never called
-     - **Unused Variables**: Remove variables that are declared but never used
-     - **Unused Parameters**: Remove function parameters that aren't used in function body
-     - **Unused Imports**: Remove all imports that aren't actually used in the file
-     - **Unused Exports**: Remove exports that aren't imported by any other file
-     - **Unused Hooks**: Detect and remove unused React hooks such as useState, useEffect, useRef, etc., that are declared but not used in functional components.
-     - **Import Consolidation**: Combine multiple imports from same module
-
-  6. **Modern Best Practices:**
-     ${projectLanguage === 'TypeScript' ? `
-     - Add comprehensive TypeScript types and interfaces
-     - Use proper generics and utility types
-     - Implement strict null checks
-     - Add JSDoc comments for all public APIs
-     ` : `
-     - Use modern JavaScript features (destructuring, arrow functions)
-     - Add comprehensive JSDoc comments
-     - Implement proper error handling
-     `}
-  
-  7. **Framework-Specific (${projectType}):**
-     - Use modern React hooks instead of class components
-     - Implement proper component structure
-     - Follow React/Next.js best practices
-     - Optimize performance with useMemo, useCallback where needed
-  
-  8. **Code Documentation:**
-     - Add comprehensive JSDoc comments
-     - Document all function parameters and return values
-     - Add inline comments for complex logic
-  
-  **FILE STRUCTURE REQUIREMENTS:**
-  - Include ALL original files (completely rewritten)
-  - Create NEW files for extracted utilities/components
-  - Use logical directory structure
-  - Update ALL import/export statements to work with new structure
-  
-  **ORIGINAL FILES TO COMPLETELY REWRITE:**
-  ${JSON.stringify({ files }, null, 2)}
-  
-  **RESPONSE FORMAT (CRITICAL - MUST BE EXACT JSON):**
-  
-  {
-    "projectType": "${projectType}",
-    "language": "${projectLanguage}",
-    "timestamp": "ISO_DATE_STRING",
-    "totalFiles": number,
-    "totalWords": number,
-    "changes_summary": "Comprehensive description of all improvements made",
-    "secrets": {
-      "API_KEY": "actual-hardcoded-value-found",
-      "DATABASE_URL": "actual-db-url-with-credentials",
-      "JWT_SECRET": "actual-jwt-token"
-    },
-    "packageAnalysis": {
-      "totalDependencies": number,
-      "totalDevDependencies": number,
-      "unusedPackagesFound": number,
-      "essentialPackagesKept": number
-    },
-    "unusedPackages": [
-      {
-        "name": "package-name-1",
-        "type": "dependency",
-        "reason": "Not imported or used anywhere in the codebase"
-      },
-      {
-        "name": "package-name-2", 
-        "type": "devDependency",
-        "reason": "Development tool no longer needed after refactoring"
-      }
-    ],
-    "npmUninstallCommands": [
-      "npm uninstall package-name-1 package-name-2",
-      "npm uninstall --save-dev dev-package-name"
-    ],
-    "originalFilesToDelete": [
-      ${files.map(f => `"${f.path}"`).join(',\n      ')}
-    ],
-    "files": [
-      {
-        "path": "relative/path/to/file${fileExtension}",
-        "content": "COMPLETE_REWRITTEN_CODE_CONTENT",
-        "isNew": true_if_new_file_false_if_replacing_original,
-        "isRewritten": true_for_completely_rewritten_files,
-        "changes": "Detailed description of improvements made to this file"
-      }
-    ],
-    "additionalFilesToDelete": [
-      "any/other/obsolete/files.js"
-    ]
-  }
-  
-  **CRITICAL SUCCESS REQUIREMENTS:**
-  ✅ ALL files must contain COMPLETE, WORKING, PRODUCTION-READY code
-  ✅ ZERO placeholders, TODO comments, or incomplete functions
-  ✅ ALL functionality from original files must be preserved
-  ✅ All import statements must reference correct file paths
-  ✅ Code must follow ${projectLanguage} syntax perfectly
-  ✅ Response must be valid JSON with exact structure above
-  ✅ Extract ALL hardcoded secrets into the "secrets" object
-  ✅ Replace hardcoded values with process.env variables in code
-  ✅ Provide conservative unused package analysis with clear reasoning
-  ✅ Group npm uninstall commands logically for easy execution
-  
-  **FAILURE CONDITIONS TO AVOID:**
-  ❌ No incomplete code or placeholder comments
-  ❌ No missing imports or broken references
-  ❌ No syntax errors or compilation issues
-  ❌ No functionality loss from original code
-  ❌ No missed hardcoded secrets
-  ❌ No removal of essential packages
-  ❌ No unclear reasoning for package removal suggestions`;
-
-  return refactoringPrompt;
-}
 
 // Start server
 app.listen(port, () => {
