@@ -1588,6 +1588,7 @@ function createRefactoringPrompt(projectType, files, projectLanguage, packageJso
      - **Unused Parameters**: Remove function parameters that aren't used in function body
      - **Unused Imports**: Remove all imports that aren't actually used in the file
      - **Unused Exports**: Remove exports that aren't imported by any other file
+     - **Unused Hooks**: Detect and remove unused React hooks such as useState, useEffect, useRef, etc., that are declared but not used in functional components.
      - **Import Consolidation**: Combine multiple imports from same module
 
   6. **Modern Best Practices:**
@@ -1711,12 +1712,3 @@ app.listen(port, () => {
     console.log('✅ Gemini API key configured');
   }
 });
-
-
-// 5. **DEAD CODE DETECTION & REMOVAL:**
-// - **Unused Functions**: Identify and remove functions that are defined but never called
-// - **Unused Variables**: Remove variables that are declared but never used
-// - **Unused Parameters**: Remove function parameters that aren't used in function body
-// - **Unused Imports**: Remove all imports that aren't actually used in the file
-// - **Unused Exports**: Remove exports that aren't imported by any other file
-// - **Import Consolidation**: Combine multiple imports from same module
