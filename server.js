@@ -385,6 +385,8 @@ function createRefactoringPrompt(projectType, files, projectLanguage, packageJso
   - When adding new exports, ensure names don't conflict with existing ones in the project
   - Use metadata to understand the broader context of the files you're refactoring
 
+  **IMPORTANT:** If allFilesMetadata is empty {}, ignore all metadata-related instructions and proceed with standard refactoring.
+
   **CONSERVATIVE APPROACH:**
   - Only suggest removing packages that are clearly unused
   - When in doubt, keep the package
@@ -1823,3 +1825,7 @@ app.listen(port, () => {
   console.log(`📋 Health check: http://localhost:${port}/api/health`);
   console.log(`🤖 Process endpoint: http://localhost:${port}/api/process-code`);
 });
+
+
+
+
