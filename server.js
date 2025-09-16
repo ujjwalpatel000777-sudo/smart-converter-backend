@@ -328,7 +328,7 @@ async function handleSubscriptionResumed(subscription) {
   }
 }
 
-function createRefactoringPrompt(projectType, files, projectLanguage, packageJson) {
+function createRefactoringPrompt(projectType, files, projectLanguage, packageJson, allFilesMetadata) {
   const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
   
   const refactoringPrompt = `You are an expert software refactoring assistant. You will COMPLETELY REWRITE all provided files with improved code.
@@ -369,6 +369,22 @@ function createRefactoringPrompt(projectType, files, projectLanguage, packageJso
   6. Indirect dependencies (packages used by other packages)
   7. Development tools used in build process
   
+  **PROJECT METADATA ANALYSIS:**
+  Complete project metadata for reference (includes ALL files, not just selected ones):
+  ${JSON.stringify(allFilesMetadata, null, 2)}
+
+   **METADATA USAGE INSTRUCTIONS:**
+  1. **Cross-Reference Check**: Before removing any function, variable, or component from selected files, check if it's imported/used in OTHER files via the metadata
+  2. **Name Collision Avoidance**: When creating new functions, variables, or components, check metadata to ensure names don't clash with existing ones across the entire project
+  3. **Import Dependency Tracking**: Use metadata to understand the dependency graph - if you're refactoring a file that exports something, check which other files import it
+  4. **Safe Removal**: Only remove exports/functions/variables if metadata shows they're not imported anywhere else in the project
+  5. **Intelligent Renaming**: If renaming something that's exported, you'll know from metadata which files need import updates (but only modify the files provided to you)
+
+  **CROSS-FILE IMPACT ANALYSIS:**
+  - Before deleting any export, check allFilesMetadata to see if it's imported elsewhere
+  - When adding new exports, ensure names don't conflict with existing ones in the project
+  - Use metadata to understand the broader context of the files you're refactoring
+
   **CONSERVATIVE APPROACH:**
   - Only suggest removing packages that are clearly unused
   - When in doubt, keep the package
@@ -578,8 +594,7 @@ async function callDeepSeekAPI(prompt, model, res) {
 // Endpoint to process code with DeepSeek
 app.post('/api/process-code', async (req, res) => {
   try {
-    const { api_key, projectType, files, totalFiles, totalWords, workspacePath, dependencies, projectLanguage, packageJson, selectedModel } = req.body;
-    
+    const { api_key, projectType, files, totalFiles, totalWords, workspacePath, dependencies, projectLanguage, packageJson, selectedModel, allFilesMetadata } = req.body;    
     // Set up Server-Sent Events headers
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -724,7 +739,7 @@ app.post('/api/process-code', async (req, res) => {
     })}\n\n`);
     
     // Create prompt for complete rewrite
-    const prompt = createRefactoringPrompt(projectType, files, projectLanguage, packageJson);
+    const prompt = createRefactoringPrompt(projectType, files, projectLanguage, packageJson, allFilesMetadata);
 
     // Send processing status
     res.write(`data: ${JSON.stringify({ 
@@ -1804,13 +1819,7 @@ app.get('/api/health', (req, res) => {
 
 // Start server
 app.listen(port, () => {
-  console.log(`\n🚀 Gemini Code Processor Server running on port ${port}`);
+  console.log(`\n🚀 Deepseek Code Processor Server running on port ${port}`);
   console.log(`📋 Health check: http://localhost:${port}/api/health`);
   console.log(`🤖 Process endpoint: http://localhost:${port}/api/process-code`);
-  
-  if (!process.env.GEMINI_API_KEY) {
-    console.warn('⚠️  WARNING: GEMINI_API_KEY not found in environment variables');
-  } else {
-    console.log('✅ Gemini API key configured');
-  }
 });
