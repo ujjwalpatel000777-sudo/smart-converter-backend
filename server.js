@@ -13,7 +13,6 @@ const OpenAI = require('openai');
 require('dotenv').config();
 
 const app = express();
-const port = process.env.PORT || 3001;
 
 const paddle = new Paddle(process.env.PADDLE_API_KEY);
 
@@ -24,12 +23,38 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceRole = process.env.SUPABASE_SERVICE_ROLE
 const supabase = createClient(supabaseUrl, supabaseServiceRole);
 
+
+
+// Initialize OpenAI client for GPT-5 Mini
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
 // Initialize deepseek AI
 // Initialize OpenRouter client
-const deepseekClient = new OpenAI({
-  baseURL: 'https://api.deepseek.com',
-  apiKey: process.env.DEEPSEEK_API_KEY
-});
+const openrouterClients = [
+  new OpenAI({
+    baseURL: "https://openrouter.ai/api/v1",
+    apiKey: process.env.DEEPSEEK_API_KEY_1,
+  }),
+  new OpenAI({
+    baseURL: "https://openrouter.ai/api/v1", 
+    apiKey: process.env.DEEPSEEK_API_KEY_2,
+  }),
+  new OpenAI({
+    baseURL: "https://openrouter.ai/api/v1",
+    apiKey: process.env.DEEPSEEK_API_KEY_3,
+  }),
+  new OpenAI({
+    baseURL: "https://openrouter.ai/api/v1",
+    apiKey: process.env.DEEPSEEK_API_KEY_4,
+  }),
+  new OpenAI({
+    baseURL: "https://openrouter.ai/api/v1",
+    apiKey: process.env.DEEPSEEK_API_KEY_5,
+  })
+];
+
 // Middleware
 app.use(cors());
 
@@ -465,6 +490,7 @@ async function handleSubscriptionResumed(subscription) {
   console.log('SUCCESS: Subscription resumed for subscription:', subscription.id);
 }
 
+
 function createRefactoringPrompt(projectType, files, projectLanguage, packageJson, allFilesMetadata) {
   const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
   
@@ -688,11 +714,24 @@ function createRefactoringPrompt(projectType, files, projectLanguage, packageJso
 
   return refactoringPrompt;
 }
+async function callDeepSeekAPI(prompt, model, plan, res) {
+  // Check if free user is trying to use non-deepseek model
+  if (plan === 'free' && model !== 'deepseek-r1') {
+    throw new Error('Free plan users can only use DeepSeek R1 model. Please upgrade to Pro for access to other models.');
+  }
 
-async function callDeepSeekAPI(prompt, model, res) {
+  // Determine the actual model to use
+  let actualModel;
+  if (model === 'deepseek-r1') {
+    actualModel = "deepseek/deepseek-r1:free";
+  } else if (model === 'gpt5-mini') {
+
+      // Use OpenAI's official API for GPT-5 Mini
   try {
-    const completion = await deepseekClient.chat.completions.create({
-      model: model, // Pass model directly from frontend
+    console.log('Attempting API call with OpenAI GPT-5 Mini');
+    
+    const completion = await openai.chat.completions.create({
+      model: "gpt-5-mini", // Adjust model name when available
       messages: [
         {
           role: 'system',
@@ -703,12 +742,12 @@ async function callDeepSeekAPI(prompt, model, res) {
           content: prompt
         }
       ],
-      temperature: 0.0, // Best for coding tasks
-      stream: true // Enable streaming
+      temperature: 0.0,
+      stream: true
     });
-    
+
     let fullResponse = '';
-    
+
     // Stream the response
     for await (const chunk of completion) {
       const content = chunk.choices[0]?.delta?.content || '';
@@ -724,17 +763,98 @@ async function callDeepSeekAPI(prompt, model, res) {
         })}\n\n`);
       }
     }
-    
+
+    console.log('✅ OpenAI GPT-5 Mini API call successful');
     return fullResponse;
+
   } catch (error) {
-    throw new Error(`DeepSeek API error: ${error.message}`);
+    console.log('❌ OpenAI GPT-5 Mini API call failed:', error.message);
+    throw error;
+  }
+    
+  } else {
+    throw new Error(`Unsupported model: ${model}`);
+  }
+
+  // For deepseek-r1, try each API key until one works
+  if (model === 'deepseek-r1') {
+    let lastError;
+    
+    for (let i = 0; i < openrouterClients.length; i++) {
+      const client = openrouterClients[i];
+      const keyNumber = i + 1;
+      
+      try {
+        console.log(`Attempting API call with DEEPSEEK_API_KEY_${keyNumber}`);
+        
+        const completion = await client.chat.completions.create({
+          model: actualModel,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an expert software refactoring assistant. Always return valid JSON responses as requested.'
+            },
+            {
+              role: 'user',
+              content: prompt
+            }
+          ],
+          temperature: 0.0,
+          stream: true
+        });
+
+        let fullResponse = '';
+
+        // Stream the response
+        for await (const chunk of completion) {
+          const content = chunk.choices[0]?.delta?.content || '';
+          
+          if (content) {
+            fullResponse += content;
+            
+            // Send streaming chunk to frontend
+            res.write(`data: ${JSON.stringify({ 
+              type: 'chunk', 
+              content: content,
+              timestamp: new Date().toISOString()
+            })}\n\n`);
+          }
+        }
+
+        console.log(`✅ API call successful with DEEPSEEK_API_KEY_${keyNumber}`);
+        return fullResponse;
+
+      } catch (error) {
+        console.log(`❌ API call failed with DEEPSEEK_API_KEY_${keyNumber}:`, error.message);
+        lastError = error;
+
+        // Check if it's a rate limit error
+        const isRateLimit = error.message?.toLowerCase().includes('rate limit') || 
+                           error.message?.toLowerCase().includes('quota') ||
+                           error.message?.toLowerCase().includes('429') ||
+                           error.status === 429;
+
+        if (isRateLimit) {
+          console.log(`🔄 Rate limit hit with key ${keyNumber}, trying next key...`);
+          continue; // Try next key
+        } else {
+          // If it's not a rate limit error, don't try other keys
+          throw error;
+        }
+      }
+    }
+
+    // If we get here, all keys failed
+    console.error('❌ All DeepSeek API keys failed');
+    throw new Error(`All DeepSeek API keys failed. Last error: ${lastError?.message || 'Unknown error'}`);
   }
 }
 
-// Endpoint to process code with DeepSeek
+
 app.post('/api/process-code', async (req, res) => {
   try {
     const { api_key, projectType, files, totalFiles, totalWords, workspacePath, dependencies, projectLanguage, packageJson, selectedModel, allFilesMetadata } = req.body;    
+    
     // Set up Server-Sent Events headers
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -888,8 +1008,8 @@ app.post('/api/process-code', async (req, res) => {
       timestamp: new Date().toISOString()
     })}\n\n`);
     
-    // Get DeepSeek response using the selected model (with streaming)
-    const deepseekResponse = await callDeepSeekAPI(prompt, selectedModel, res);
+    // Get AI response using the selected model (with streaming) - PASS THE USER PLAN
+    const aiResponse = await callDeepSeekAPI(prompt, selectedModel, apiKeyData.users.plan, res);
 
     // Send processing status
     res.write(`data: ${JSON.stringify({ 
@@ -905,14 +1025,14 @@ app.post('/api/process-code', async (req, res) => {
       let jsonContent = '';
       
       // Strategy 1: Look for JSON block between ```json and ```
-      const codeBlockMatch = deepseekResponse.match(/```json\s*([\s\S]*?)\s*```/);
+      const codeBlockMatch = aiResponse.match(/```json\s*([\s\S]*?)\s*```/);
       if (codeBlockMatch) {
         jsonContent = codeBlockMatch[1].trim();
       }
       
       // Strategy 2: Look for JSON object starting with { and ending with }
       if (!jsonContent) {
-        const jsonMatch = deepseekResponse.match(/\{[\s\S]*\}/);
+        const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           jsonContent = jsonMatch[0];
         }
@@ -920,7 +1040,7 @@ app.post('/api/process-code', async (req, res) => {
       
       // Strategy 3: Try to clean the response and extract JSON
       if (!jsonContent) {
-        let cleaned = deepseekResponse
+        let cleaned = aiResponse
           .replace(/^[\s\S]*?(?=\{)/, '') // Remove everything before first {
           .replace(/\}[\s\S]*$/, '}') // Remove everything after last }
           .trim();
@@ -934,18 +1054,18 @@ app.post('/api/process-code', async (req, res) => {
       if (jsonContent) {
         parsedResponse = JSON.parse(jsonContent);
       } else {
-        console.error('No JSON content found in DeepSeek response');
-        console.error('Full response:', deepseekResponse);
-        throw new Error('No valid JSON found in DeepSeek response');
+        console.error('No JSON content found in AI response');
+        console.error('Full response:', aiResponse);
+        throw new Error('No valid JSON found in AI response');
       }
       
     } catch (parseError) {
       console.error('JSON parsing failed:', parseError.message);
-      console.error('Raw response:', deepseekResponse);
+      console.error('Raw response:', aiResponse);
       
       // Try one more fallback - attempt to fix common JSON issues
       try {
-        let fixedJson = deepseekResponse
+        let fixedJson = aiResponse
           .replace(/^[\s\S]*?(\{)/, '$1') // Remove everything before first {
           .replace(/(\})[\s\S]*$/, '$1') // Remove everything after last }
           .replace(/,\s*}/g, '}') // Remove trailing commas
@@ -959,11 +1079,11 @@ app.post('/api/process-code', async (req, res) => {
         // Send error via stream and end
         res.write(`data: ${JSON.stringify({
           type: 'error',
-          error: 'Failed to parse DeepSeek AI response as JSON',
+          error: 'Failed to parse AI response as JSON',
           details: {
             originalError: parseError.message,
             fallbackError: fallbackError.message,
-            responsePreview: deepseekResponse.substring(0, 200) + '...',
+            responsePreview: aiResponse.substring(0, 200) + '...',
             suggestion: 'The AI response format was unexpected. This might be a temporary issue. Please try again.'
           }
         })}\n\n`);
@@ -978,7 +1098,7 @@ app.post('/api/process-code', async (req, res) => {
       console.error('Parsed response is not an object:', parsedResponse);
       res.write(`data: ${JSON.stringify({
         type: 'error',
-        error: 'Invalid response structure from DeepSeek AI',
+        error: 'Invalid response structure from AI',
         details: 'Expected JSON object but got: ' + typeof parsedResponse
       })}\n\n`);
       res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
@@ -1043,6 +1163,7 @@ app.post('/api/process-code', async (req, res) => {
     res.end();
   }
 });
+
 app.post('/api/subscription/cancel', async (req, res) => {
   try {
     const { userName } = req.body;
@@ -1737,7 +1858,6 @@ app.post('/api/get-user-api-info', async (req, res) => {
     });
   }
 });
-
 
 
 // Route to handle user authentication and database operations
