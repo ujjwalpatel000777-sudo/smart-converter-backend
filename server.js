@@ -929,7 +929,7 @@ app.post('/api/process-code', async (req, res) => {
       if (apiKeyData.count >= 3) {
         res.write(`data: ${JSON.stringify({
           type: 'error',
-          error: 'Free plan limit reached. You have used all 3 lifetime requests. Please upgrade to Pro plan for unlimited usage.',
+          error: 'Free plan limit reached. You have used all 3 lifetime requests. Please upgrade to Pro plan for more usage.',
           data: {
             count: apiKeyData.count,
             limit: 3,
