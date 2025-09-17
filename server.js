@@ -26,9 +26,9 @@ const supabase = createClient(supabaseUrl, supabaseServiceRole);
 
 // Initialize deepseek AI
 // Initialize OpenRouter client
-const openrouterClient = new OpenAI({
-  baseURL: "https://openrouter.ai/api/v1",
-  apiKey: process.env.DEEPSEEK_API_KEY,
+const deepseekClient = new OpenAI({
+  baseURL: 'https://api.deepseek.com',
+  apiKey: process.env.DEEPSEEK_API_KEY
 });
 // Middleware
 app.use(cors());
@@ -551,10 +551,11 @@ function createRefactoringPrompt(projectType, files, projectLanguage, packageJso
 
   return refactoringPrompt;
 }
+
 async function callDeepSeekAPI(prompt, model, res) {
   try {
-    const completion = await openrouterClient.chat.completions.create({
-      model: "deepseek/deepseek-r1:free", // Hardcoded model
+    const completion = await deepseekClient.chat.completions.create({
+      model: model, // Pass model directly from frontend
       messages: [
         {
           role: 'system',
@@ -568,9 +569,9 @@ async function callDeepSeekAPI(prompt, model, res) {
       temperature: 0.0, // Best for coding tasks
       stream: true // Enable streaming
     });
-
+    
     let fullResponse = '';
-
+    
     // Stream the response
     for await (const chunk of completion) {
       const content = chunk.choices[0]?.delta?.content || '';
@@ -586,10 +587,10 @@ async function callDeepSeekAPI(prompt, model, res) {
         })}\n\n`);
       }
     }
-
+    
     return fullResponse;
   } catch (error) {
-    throw new Error(`OpenRouter API error: ${error.message}`);
+    throw new Error(`DeepSeek API error: ${error.message}`);
   }
 }
 
