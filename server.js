@@ -1825,7 +1825,3 @@ app.listen(port, () => {
   console.log(`📋 Health check: http://localhost:${port}/api/health`);
   console.log(`🤖 Process endpoint: http://localhost:${port}/api/process-code`);
 });
-
-
-
-
