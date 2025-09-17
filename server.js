@@ -159,7 +159,6 @@ async function findApiKeyRecord(plainApiKey) {
   return null;
 }
 
-// Enhanced Paddle webhook handlers
 async function handleSubscriptionActivated(subscription) {
   console.log('=== HANDLING SUBSCRIPTION ACTIVATED ===');
   console.log('Subscription object:', JSON.stringify(subscription, null, 2));
@@ -188,7 +187,8 @@ async function handleSubscriptionActivated(subscription) {
     return;
   }
 
-  const { error } = await supabase
+  // Update user to pro plan
+  const { error: updateError } = await supabase
     .from('users')
     .update({ 
       plan: 'pro',
@@ -197,31 +197,78 @@ async function handleSubscriptionActivated(subscription) {
     })
     .eq('name', user.name);
 
-  if (error) {
+  if (updateError) {
     console.log('ERROR: Failed to activate subscription in database');
-    console.log('Database error:', JSON.stringify(error, null, 2));
-  } else {
-    console.log('SUCCESS: Subscription activated for user:', user.name);
+    console.log('Database error:', JSON.stringify(updateError, null, 2));
+    return;
   }
+
+  // Reset count to 0 for newly activated pro users
+  const { error: countError } = await supabase
+    .from('api_keys')
+    .update({ 
+      count: 0,
+      last_reset_date: new Date().toISOString().split('T')[0]
+    })
+    .eq('name', user.name);
+
+  if (countError) {
+    console.log('ERROR: Failed to reset count for activated user');
+    console.log('Count error:', JSON.stringify(countError, null, 2));
+  } else {
+    console.log('SUCCESS: Count reset to 0 for activated pro user');
+  }
+
+  console.log('SUCCESS: Subscription activated for user:', user.name);
 }
 async function handleSubscriptionPastDue(subscription) {
   console.log('=== HANDLING SUBSCRIPTION PAST DUE ===');
   console.log('Subscription object:', JSON.stringify(subscription, null, 2));
 
-  const { error } = await supabase
+  // Get the user name first
+  const { data: user, error: getUserError } = await supabase
+    .from('users')
+    .select('name')
+    .eq('subscription_id', subscription.id)
+    .single();
+
+  if (getUserError) {
+    console.log('ERROR: Failed to get user for past due handling');
+    return;
+  }
+
+  // Update user plan to free
+  const { error: userError } = await supabase
     .from('users')
     .update({ 
       plan: 'free',
       subscription_status: 'past_due'
     })
     .eq('subscription_id', subscription.id);
-   
-  if (error) {
+
+  if (userError) {
     console.log('ERROR: Failed to handle past due subscription in database');
-    console.log('Database error:', JSON.stringify(error, null, 2));
-  } else {
-    console.log('SUCCESS: Subscription marked as past due and downgraded to free for subscription:', subscription.id);
+    console.log('Database error:', JSON.stringify(userError, null, 2));
+    return;
   }
+
+  // Set count to 3 (used all free requests) for past due users
+  const { error: countError } = await supabase
+    .from('api_keys')
+    .update({ 
+      count: 3,
+      last_reset_date: new Date().toISOString().split('T')[0]
+    })
+    .eq('name', user.name);
+
+  if (countError) {
+    console.log('ERROR: Failed to set count to 3 for past due user');
+    console.log('Count error:', JSON.stringify(countError, null, 2));
+  } else {
+    console.log('SUCCESS: Count set to 3 for past due user (no free requests remaining)');
+  }
+
+  console.log('SUCCESS: Subscription marked as past due and downgraded to free for subscription:', subscription.id);
 }
 
 async function handleSubscriptionUpdated(subscription) {
@@ -272,60 +319,150 @@ async function handleSubscriptionCancelled(subscription) {
   console.log('=== HANDLING SUBSCRIPTION CANCELLED ===');
   console.log('Subscription object:', JSON.stringify(subscription, null, 2));
 
-  const { error } = await supabase
+  // Get the user name first
+  const { data: user, error: getUserError } = await supabase
+    .from('users')
+    .select('name')
+    .eq('subscription_id', subscription.id)
+    .single();
+
+  if (getUserError) {
+    console.log('ERROR: Failed to get user for cancellation');
+    return;
+  }
+
+  // Update user plan to free
+  const { error: userError } = await supabase
     .from('users')
     .update({ 
       plan: 'free',
       subscription_status: 'cancelled'
     })
     .eq('subscription_id', subscription.id);
-   
-  if (error) {
+
+  if (userError) {
     console.log('ERROR: Failed to cancel subscription in database');
-    console.log('Database error:', JSON.stringify(error, null, 2));
-  } else {
-    console.log('SUCCESS: Subscription cancelled and downgraded to free for subscription:', subscription.id);
+    console.log('Database error:', JSON.stringify(userError, null, 2));
+    return;
   }
+
+  // Reset count to 0 for cancelled users (give them 3 fresh free requests)
+  const { error: countError } = await supabase
+    .from('api_keys')
+    .update({ 
+      count: 0,
+      last_reset_date: new Date().toISOString().split('T')[0]
+    })
+    .eq('name', user.name);
+
+  if (countError) {
+    console.log('ERROR: Failed to reset count for cancelled user');
+    console.log('Count error:', JSON.stringify(countError, null, 2));
+  } else {
+    console.log('SUCCESS: Count reset to 0 for cancelled user (3 free requests available)');
+  }
+
+  console.log('SUCCESS: Subscription cancelled and downgraded to free for subscription:', subscription.id);
 }
 
 async function handleSubscriptionPaused(subscription) {
   console.log('=== HANDLING SUBSCRIPTION PAUSED ===');
   console.log('Subscription object:', JSON.stringify(subscription, null, 2));
 
-  const { error } = await supabase
+  // Get the user name first
+  const { data: user, error: getUserError } = await supabase
+    .from('users')
+    .select('name')
+    .eq('subscription_id', subscription.id)
+    .single();
+
+  if (getUserError) {
+    console.log('ERROR: Failed to get user for paused handling');
+    return;
+  }
+
+  // Update user plan to free
+  const { error: userError } = await supabase
     .from('users')
     .update({ 
       plan: 'free',
       subscription_status: 'paused'
     })
     .eq('subscription_id', subscription.id);
-   
-  if (error) {
+
+  if (userError) {
     console.log('ERROR: Failed to pause subscription in database');
-    console.log('Database error:', JSON.stringify(error, null, 2));
-  } else {
-    console.log('SUCCESS: Subscription paused for subscription:', subscription.id);
+    console.log('Database error:', JSON.stringify(userError, null, 2));
+    return;
   }
+
+  // Set count to 3 (used all free requests) for paused users
+  const { error: countError } = await supabase
+    .from('api_keys')
+    .update({ 
+      count: 3,
+      last_reset_date: new Date().toISOString().split('T')[0]
+    })
+    .eq('name', user.name);
+
+  if (countError) {
+    console.log('ERROR: Failed to set count to 3 for paused user');
+    console.log('Count error:', JSON.stringify(countError, null, 2));
+  } else {
+    console.log('SUCCESS: Count set to 3 for paused user (no free requests remaining)');
+  }
+
+  console.log('SUCCESS: Subscription paused for subscription:', subscription.id);
 }
 
 async function handleSubscriptionResumed(subscription) {
   console.log('=== HANDLING SUBSCRIPTION RESUMED ===');
   console.log('Subscription object:', JSON.stringify(subscription, null, 2));
 
-  const { error } = await supabase
+  // Get the user name first
+  const { data: user, error: getUserError } = await supabase
+    .from('users')
+    .select('name')
+    .eq('subscription_id', subscription.id)
+    .single();
+
+  if (getUserError) {
+    console.log('ERROR: Failed to get user for resume handling');
+    return;
+  }
+
+  // Update user plan to pro
+  const { error: userError } = await supabase
     .from('users')
     .update({ 
       plan: 'pro',
       subscription_status: 'active'
     })
     .eq('subscription_id', subscription.id);
-   
-  if (error) {
+
+  if (userError) {
     console.log('ERROR: Failed to resume subscription in database');
-    console.log('Database error:', JSON.stringify(error, null, 2));
-  } else {
-    console.log('SUCCESS: Subscription resumed for subscription:', subscription.id);
+    console.log('Database error:', JSON.stringify(userError, null, 2));
+    return;
   }
+
+  // Reset count to 0 for resumed pro users (fresh daily limit)
+  const { error: countError } = await supabase
+    .from('api_keys')
+    .update({ 
+      count: 0,
+      last_reset_date: new Date().toISOString().split('T')[0]
+    })
+    .eq('name', user.name);
+
+  if (countError) {
+    console.log('ERROR: Failed to reset count for resumed user');
+    console.log('Count error:', JSON.stringify(countError, null, 2));
+  } else {
+    console.log('SUCCESS: Count reset to 0 for resumed pro user');
+  }
+
+  console.log('SUCCESS: Subscription resumed for subscription:', subscription.id);
 }
 
 function createRefactoringPrompt(projectType, files, projectLanguage, packageJson, allFilesMetadata) {
