@@ -1738,72 +1738,7 @@ app.post('/api/get-user-api-info', async (req, res) => {
   }
 });
 
-// Route to check user limit for login
-app.get('/api/check-user-limit', async (req, res) => {
-  try {
-    // ===================================================
-    // CONFIGURABLE USER LIMIT - Change this value as needed
-    // ===================================================
-    const MAX_USERS = 10;
 
-    // Get current user count from database
-    const { count, error } = await supabase
-      .from('users')
-      .select('*', { count: 'exact', head: true });
-
-    if (error) {
-      console.error('Error checking user count:', error);
-      // Return success if check fails to avoid blocking legitimate users
-      return res.json({
-        success: true,
-        canLogin: true,
-        message: 'User limit check temporarily unavailable'
-      });
-    }
-
-    const currentUserCount = count || 0;
-    const limitReached = currentUserCount >= MAX_USERS;
-    
-    // console.log(`📊 User limit check: ${currentUserCount}/${MAX_USERS} users`);
-    
-    if (limitReached) {
-      return res.json({
-        success: true,
-        canLogin: false,
-        message: `Currently ${MAX_USERS} users only allowed. Try again later.`,
-        data: {
-          currentUsers: currentUserCount,
-          maxUsers: MAX_USERS,
-          limitReached: true
-        }
-      });
-    }
-    
-    // Allow login
-    res.json({
-      success: true,
-      canLogin: true,
-      message: 'Login allowed',
-      data: {
-        currentUsers: currentUserCount,
-        maxUsers: MAX_USERS,
-        remainingSlots: MAX_USERS - currentUserCount,
-        limitReached: false
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Error in user limit check:', error);
-    
-    // Return success if error occurs to avoid blocking users
-    res.json({
-      success: true,
-      canLogin: true,
-      message: 'User limit check failed, allowing login',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
 
 // Route to handle user authentication and database operations
 app.post('/api/handle-user-auth', async (req, res) => {
