@@ -744,7 +744,6 @@ async function callDeepSeekAPI(prompt, model, plan, res) {
           content: prompt
         }
       ],
-      temperature: 0.0,
       stream: true
     });
 
