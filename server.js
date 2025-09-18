@@ -1150,131 +1150,66 @@ app.post('/api/process-code', async (req, res) => {
 });
 
 //user prompt based 
-function createCustomGenerationPrompt(projectType, files, projectLanguage, projectStructure, userPrompt, allFilesMetadata) {
+function createCustomGenerationPrompt(projectType, files, projectLanguage, userPrompt, allFilesMetadata, packageJson) {
   const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
   
-  const customPrompt = `You are an expert software development assistant. You will generate completely NEW files based on the user's specific requirements.
+  const customPrompt = `You are an expert software development assistant. Generate completely NEW files based on user requirements.
 
-**IMPORTANT PROJECT SETTINGS:**
-- Project Type: ${projectType}
+**PROJECT SETTINGS:**
+- Type: ${projectType}
 - Language: ${projectLanguage}
-- Use ${fileExtension} file extensions
-- Follow ${projectLanguage} best practices and syntax
+- Extensions: ${fileExtension}
 
-**COMPLETE PROJECT STRUCTURE:**
-This shows the full folder and file hierarchy of the project:
-${JSON.stringify(projectStructure, null, 2)}
+**PACKAGE.JSON:**
+${JSON.stringify(packageJson, null, 2)}
 
-**PROJECT METADATA ANALYSIS:**
-Complete project metadata for reference (includes ALL files with their exports, imports, and functions):
+**PROJECT METADATA:**
 ${JSON.stringify(allFilesMetadata, null, 2)}
 
-**EXISTING FILES FOR REFERENCE:**
+**EXISTING FILES:**
 ${JSON.stringify(files, null, 2)}
-
-**METADATA USAGE INSTRUCTIONS:**
-1. **Structure Awareness**: Use the project structure to place new files in appropriate directories
-2. **Naming Conflicts**: Check metadata to ensure new functions, components, and variables don't conflict with existing ones
-3. **Import Optimization**: Leverage existing exports from the metadata when possible
-4. **Integration Points**: Use metadata to understand how to connect new files with existing codebase
-5. **Consistency**: Follow existing patterns found in the metadata for naming and structure
-
-**IMPORTANT:** If allFilesMetadata is empty {}, ignore metadata-related instructions and use project structure for placement guidance.
 
 **USER REQUIREMENTS:**
 ${userPrompt}
 
-**GENERATION INSTRUCTIONS:**
+**GENERATION RULES:**
+1. **Security**: Use process.env variables for API keys/secrets (format: API_KEY_NAME="put-your-key-here")
+2. **Integration**: Follow existing project patterns and structure
+3. **Quality**: Complete, working, production-ready code only
+4. **Dependencies**: Suggest new packages if needed via npm install commands
 
-🎯 **CUSTOM GENERATION APPROACH:**
-- Generate COMPLETELY NEW files based on user requirements
-- All files must be COMPLETE, WORKING, PRODUCTION-READY code
-- Maintain consistency with existing project structure and patterns
-- Follow the established coding conventions from existing files
-- Create proper integration points with existing codebase
-
-**Generation Rules to Apply:**
-
-1. **Security First:** 
-   - Use process.env variables for any configuration
-   - Follow security best practices
-   - Validate inputs appropriately
-
-2. **Naming Conventions:** 
-   - Use camelCase for variables and functions
-   - Use PascalCase for classes and components
-   - Use UPPER_SNAKE_CASE for constants and env vars
-   - Follow existing project naming patterns
-
-3. **Code Quality:**
-   - Write clean, readable, maintainable code
-   - Add comprehensive comments and documentation
-   - Follow SOLID principles
-   - Include error handling where appropriate
-
-4. **Integration:**
-   - Ensure new files integrate seamlessly with existing structure
-   - Use consistent import/export patterns from metadata
-   - Follow existing architectural patterns found in project structure
-   - Maintain compatibility with project dependencies
-   - Leverage existing utility functions and components from metadata
-
-5. **File Organization:**
-   - Follow the established directory structure from projectStructure
-   - Place files in appropriate folders based on their purpose
-   - Use consistent naming conventions from existing files
-   - Create new directories only when necessary for organization
-   - Include proper module exports/imports matching existing patterns
-
-**RESPONSE FORMAT (CRITICAL - MUST BE EXACT JSON):**
-
+**RESPONSE FORMAT:**
 {
   "projectType": "${projectType}",
   "language": "${projectLanguage}",
   "timestamp": "ISO_DATE_STRING",
-  "totalFilesGenerated": number,
+  "totalFiles": number,
   "totalWords": number,
-  "generation_summary": "Comprehensive description of what was generated and how it fulfills the user requirements",
-  "userPrompt": "${userPrompt}",
-  "integration_notes": [
-    "Note about how to integrate file 1 with existing codebase",
-    "Note about any dependencies that need to be installed",
-    "Note about any configuration changes needed"
+  "changes_summary": "Description of generated files and functionality",
+  "secrets": {
+    "API_KEY_NAME": "put-your-key-here",
+    "DATABASE_URL": "put-your-db-url-here"
+  },
+  "npmInstallCommands": [
+    "npm install package-name-1 package-name-2",
+    "npm install --save-dev dev-package-name"
   ],
   "files": [
     {
-      "path": "relative/path/to/new/file${fileExtension}",
-      "content": "COMPLETE_WORKING_CODE_CONTENT",
+      "path": "relative/path/to/file${fileExtension}",
+      "content": "COMPLETE_WORKING_CODE",
       "isNew": true,
-      "purpose": "Clear description of what this file does and why it was created",
-      "dependencies": ["list", "of", "imports", "or", "dependencies"],
-      "exports": ["list", "of", "main", "exports"],
-      "integration_points": ["how this connects to existing code"]
+      "isRewritten": false,
+      "changes": "Description of what this file does"
     }
-  ],
-  "next_steps": [
-    "Step 1: Install any new dependencies if needed",
-    "Step 2: Import and use the generated files",
-    "Step 3: Test the implementation"
   ]
 }
 
-**CRITICAL SUCCESS REQUIREMENTS:**
-✅ ALL files must contain COMPLETE, WORKING, PRODUCTION-READY code
-✅ ZERO placeholders, TODO comments, or incomplete functions
-✅ Code must follow ${projectLanguage} syntax perfectly
-✅ Response must be valid JSON with exact structure above
-✅ Files should directly address the user's requirements
-✅ Integration with existing codebase should be seamless
-✅ Include proper error handling and edge case management
-
-**FAILURE CONDITIONS TO AVOID:**
-❌ No incomplete code or placeholder comments
-❌ No missing imports or broken references
-❌ No syntax errors or compilation issues
-❌ No files that don't address user requirements
-❌ No poorly structured or unorganized code
-❌ No hardcoded values that should be configurable`;
+**REQUIREMENTS:**
+✅ Complete working code only
+✅ No placeholders or TODOs
+✅ Use environment variables for secrets
+✅ Follow existing project patterns`;
 
   return customPrompt;
 }
@@ -1344,10 +1279,10 @@ app.post('/api/generate-custom', async (req, res) => {
       projectType, 
       files, 
       projectLanguage, 
-      projectStructure, 
       userPrompt, 
       selectedModel,
-      allFilesMetadata
+      allFilesMetadata,
+      packageJson
     } = req.body;    
     
     // Set up Server-Sent Events headers
@@ -1471,6 +1406,17 @@ app.post('/api/generate-custom', async (req, res) => {
       return;
     }
 
+    // Validation for packageJson
+    if (!packageJson || typeof packageJson !== 'object') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'Invalid input: packageJson is required and must be an object'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
     // Validation for required fields
     if (!projectType || typeof projectType !== 'string') {
       res.write(`data: ${JSON.stringify({
@@ -1504,9 +1450,9 @@ app.post('/api/generate-custom', async (req, res) => {
       projectType, 
       files || [], 
       projectLanguage, 
-      projectStructure || {}, 
       userPrompt.trim(),
-      allFilesMetadata || {}
+      allFilesMetadata || {},
+      packageJson
     );
 
     // Send processing status
