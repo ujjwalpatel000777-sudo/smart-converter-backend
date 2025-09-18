@@ -492,7 +492,7 @@ async function handleSubscriptionResumed(subscription) {
   console.log('SUCCESS: Subscription resumed for subscription:', subscription.id);
 }
 
-
+//refactor
 function createRefactoringPrompt(projectType, files, projectLanguage, packageJson, allFilesMetadata) {
   const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
   
@@ -700,68 +700,21 @@ function createRefactoringPrompt(projectType, files, projectLanguage, packageJso
   return refactoringPrompt;
 }
 async function callDeepSeekAPI(prompt, model, plan, res) {
-  // Check if free user is trying to use non-deepseek model
+  // Check user plan and model restrictions
   if (plan === 'free' && model !== 'deepseek-r1') {
     throw new Error('Free plan users can only use DeepSeek R1 model. Please upgrade to Pro for access to other models.');
   }
 
+  // PAID USERS: Block DeepSeek R1 access
+  if (plan !== 'free' && model === 'deepseek-r1') {
+    throw new Error('DeepSeek R1 is only available for free plan users. Pro users have access to GPT-5 Mini.');
+  }
+
   // Determine the actual model to use
-  let actualModel;
   if (model === 'deepseek-r1') {
-    actualModel = "deepseek/deepseek-r1:free";
-  } else if (model === 'gpt5-mini') {
-
-      // Use OpenAI's official API for GPT-5 Mini
-  try {
-    console.log('Attempting API call with OpenAI GPT-5 Mini');
+    // This should only execute for free users now
+    const actualModel = "deepseek/deepseek-r1:free";
     
-    const completion = await openai.chat.completions.create({
-      model: "gpt-5-mini", // Adjust model name when available
-      messages: [
-        {
-          role: 'system',
-          content: 'You are an expert software refactoring assistant. Always return valid JSON responses as requested.'
-        },
-        {
-          role: 'user',
-          content: prompt
-        }
-      ],
-      stream: true
-    });
-
-    let fullResponse = '';
-
-    // Stream the response
-    for await (const chunk of completion) {
-      const content = chunk.choices[0]?.delta?.content || '';
-      
-      if (content) {
-        fullResponse += content;
-        
-        // Send streaming chunk to frontend
-        res.write(`data: ${JSON.stringify({ 
-          type: 'chunk', 
-          content: content,
-          timestamp: new Date().toISOString()
-        })}\n\n`);
-      }
-    }
-
-    console.log('✅ OpenAI GPT-5 Mini API call successful');
-    return fullResponse;
-
-  } catch (error) {
-    console.log('❌ OpenAI GPT-5 Mini API call failed:', error.message);
-    throw error;
-  }
-    
-  } else {
-    throw new Error(`Unsupported model: ${model}`);
-  }
-
-  // For deepseek-r1, try each API key until one works
-  if (model === 'deepseek-r1') {
     let lastError;
     
     for (let i = 0; i < openrouterClients.length; i++) {
@@ -769,7 +722,7 @@ async function callDeepSeekAPI(prompt, model, plan, res) {
       const keyNumber = i + 1;
       
       try {
-        console.log(`Attempting API call with DEEPSEEK_API_KEY_${keyNumber}`);
+        console.log(`Attempting API call with DEEPSEEK_API_KEY_${keyNumber} (Free user)`);
         
         const completion = await client.chat.completions.create({
           model: actualModel,
@@ -805,7 +758,7 @@ async function callDeepSeekAPI(prompt, model, plan, res) {
           }
         }
 
-        console.log(`✅ API call successful with DEEPSEEK_API_KEY_${keyNumber}`);
+        console.log(`✅ API call successful with DEEPSEEK_API_KEY_${keyNumber} (Free user)`);
         return fullResponse;
 
       } catch (error) {
@@ -828,9 +781,57 @@ async function callDeepSeekAPI(prompt, model, plan, res) {
       }
     }
 
-    // If we get here, all keys failed
+    // If we get here, all DeepSeek keys failed
     console.error('❌ All DeepSeek API keys failed');
     throw new Error(`All DeepSeek API keys failed. Last error: ${lastError?.message || 'Unknown error'}`);
+    
+  } else if (model === 'gpt5-mini') {
+    // GPT-5 Mini for paid users only
+    try {
+      console.log('Attempting API call with OpenAI GPT-5 Mini (Pro user)');
+      
+      const completion = await openai.chat.completions.create({
+        model: "gpt-5-mini",
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert software refactoring assistant. Always return valid JSON responses as requested.'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        stream: true
+      });
+
+      let fullResponse = '';
+
+      // Stream the response
+      for await (const chunk of completion) {
+        const content = chunk.choices[0]?.delta?.content || '';
+        
+        if (content) {
+          fullResponse += content;
+          
+          // Send streaming chunk to frontend
+          res.write(`data: ${JSON.stringify({ 
+            type: 'chunk', 
+            content: content,
+            timestamp: new Date().toISOString()
+          })}\n\n`);
+        }
+      }
+
+      console.log('✅ OpenAI GPT-5 Mini API call successful (Pro user)');
+      return fullResponse;
+
+    } catch (error) {
+      console.log('❌ OpenAI GPT-5 Mini API call failed:', error.message);
+      throw error;
+    }
+  } else {
+    throw new Error(`Unsupported model: ${model}. Available models: DeepSeek R1 (free users), GPT-5 Mini (pro users)`);
   }
 }
 
@@ -1147,6 +1148,944 @@ app.post('/api/process-code', async (req, res) => {
     res.end();
   }
 });
+
+//user prompt based 
+function createCustomGenerationPrompt(projectType, files, projectLanguage, projectStructure, userPrompt, allFilesMetadata) {
+  const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
+  
+  const customPrompt = `You are an expert software development assistant. You will generate completely NEW files based on the user's specific requirements.
+
+**IMPORTANT PROJECT SETTINGS:**
+- Project Type: ${projectType}
+- Language: ${projectLanguage}
+- Use ${fileExtension} file extensions
+- Follow ${projectLanguage} best practices and syntax
+
+**COMPLETE PROJECT STRUCTURE:**
+This shows the full folder and file hierarchy of the project:
+${JSON.stringify(projectStructure, null, 2)}
+
+**PROJECT METADATA ANALYSIS:**
+Complete project metadata for reference (includes ALL files with their exports, imports, and functions):
+${JSON.stringify(allFilesMetadata, null, 2)}
+
+**EXISTING FILES FOR REFERENCE:**
+${JSON.stringify(files, null, 2)}
+
+**METADATA USAGE INSTRUCTIONS:**
+1. **Structure Awareness**: Use the project structure to place new files in appropriate directories
+2. **Naming Conflicts**: Check metadata to ensure new functions, components, and variables don't conflict with existing ones
+3. **Import Optimization**: Leverage existing exports from the metadata when possible
+4. **Integration Points**: Use metadata to understand how to connect new files with existing codebase
+5. **Consistency**: Follow existing patterns found in the metadata for naming and structure
+
+**IMPORTANT:** If allFilesMetadata is empty {}, ignore metadata-related instructions and use project structure for placement guidance.
+
+**USER REQUIREMENTS:**
+${userPrompt}
+
+**GENERATION INSTRUCTIONS:**
+
+🎯 **CUSTOM GENERATION APPROACH:**
+- Generate COMPLETELY NEW files based on user requirements
+- All files must be COMPLETE, WORKING, PRODUCTION-READY code
+- Maintain consistency with existing project structure and patterns
+- Follow the established coding conventions from existing files
+- Create proper integration points with existing codebase
+
+**Generation Rules to Apply:**
+
+1. **Security First:** 
+   - Use process.env variables for any configuration
+   - Follow security best practices
+   - Validate inputs appropriately
+
+2. **Naming Conventions:** 
+   - Use camelCase for variables and functions
+   - Use PascalCase for classes and components
+   - Use UPPER_SNAKE_CASE for constants and env vars
+   - Follow existing project naming patterns
+
+3. **Code Quality:**
+   - Write clean, readable, maintainable code
+   - Add comprehensive comments and documentation
+   - Follow SOLID principles
+   - Include error handling where appropriate
+
+4. **Integration:**
+   - Ensure new files integrate seamlessly with existing structure
+   - Use consistent import/export patterns from metadata
+   - Follow existing architectural patterns found in project structure
+   - Maintain compatibility with project dependencies
+   - Leverage existing utility functions and components from metadata
+
+5. **File Organization:**
+   - Follow the established directory structure from projectStructure
+   - Place files in appropriate folders based on their purpose
+   - Use consistent naming conventions from existing files
+   - Create new directories only when necessary for organization
+   - Include proper module exports/imports matching existing patterns
+
+**RESPONSE FORMAT (CRITICAL - MUST BE EXACT JSON):**
+
+{
+  "projectType": "${projectType}",
+  "language": "${projectLanguage}",
+  "timestamp": "ISO_DATE_STRING",
+  "totalFilesGenerated": number,
+  "totalWords": number,
+  "generation_summary": "Comprehensive description of what was generated and how it fulfills the user requirements",
+  "userPrompt": "${userPrompt}",
+  "integration_notes": [
+    "Note about how to integrate file 1 with existing codebase",
+    "Note about any dependencies that need to be installed",
+    "Note about any configuration changes needed"
+  ],
+  "files": [
+    {
+      "path": "relative/path/to/new/file${fileExtension}",
+      "content": "COMPLETE_WORKING_CODE_CONTENT",
+      "isNew": true,
+      "purpose": "Clear description of what this file does and why it was created",
+      "dependencies": ["list", "of", "imports", "or", "dependencies"],
+      "exports": ["list", "of", "main", "exports"],
+      "integration_points": ["how this connects to existing code"]
+    }
+  ],
+  "next_steps": [
+    "Step 1: Install any new dependencies if needed",
+    "Step 2: Import and use the generated files",
+    "Step 3: Test the implementation"
+  ]
+}
+
+**CRITICAL SUCCESS REQUIREMENTS:**
+✅ ALL files must contain COMPLETE, WORKING, PRODUCTION-READY code
+✅ ZERO placeholders, TODO comments, or incomplete functions
+✅ Code must follow ${projectLanguage} syntax perfectly
+✅ Response must be valid JSON with exact structure above
+✅ Files should directly address the user's requirements
+✅ Integration with existing codebase should be seamless
+✅ Include proper error handling and edge case management
+
+**FAILURE CONDITIONS TO AVOID:**
+❌ No incomplete code or placeholder comments
+❌ No missing imports or broken references
+❌ No syntax errors or compilation issues
+❌ No files that don't address user requirements
+❌ No poorly structured or unorganized code
+❌ No hardcoded values that should be configurable`;
+
+  return customPrompt;
+}
+
+async function callAIForCustomGeneration(prompt, model, plan, res) {
+  // Only allow paid users
+  if (plan === 'free') {
+    throw new Error('Custom file generation is only available for Pro plan users. Please upgrade to access this feature.');
+  }
+
+  // Only support GPT-5 Mini for custom generation
+  if (model !== 'gpt5-mini') {
+    throw new Error('Custom file generation only supports GPT-5 Mini model. Please select GPT-5 Mini.');
+  }
+
+  // Use OpenAI's official API for GPT-5 Mini
+  try {
+    console.log('Attempting API call with OpenAI GPT-5 Mini for custom generation');
+    
+    const completion = await openai.chat.completions.create({
+      model: "gpt-5-mini",
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an expert software development assistant. Generate complete, working code files based on user requirements. Always return valid JSON responses as requested.'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      stream: true,
+      temperature: 0.2 // Slightly higher for creativity but still controlled
+    });
+
+    let fullResponse = '';
+
+    // Stream the response
+    for await (const chunk of completion) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      
+      if (content) {
+        fullResponse += content;
+        
+        // Send streaming chunk to frontend
+        res.write(`data: ${JSON.stringify({ 
+          type: 'chunk', 
+          content: content,
+          timestamp: new Date().toISOString()
+        })}\n\n`);
+      }
+    }
+
+    console.log('✅ OpenAI GPT-5 Mini API call successful for custom generation');
+    return fullResponse;
+
+  } catch (error) {
+    console.log('❌ OpenAI GPT-5 Mini API call failed:', error.message);
+    throw error;
+  }
+}
+
+app.post('/api/generate-custom', async (req, res) => {
+  try {
+    const { 
+      api_key, 
+      projectType, 
+      files, 
+      projectLanguage, 
+      projectStructure, 
+      userPrompt, 
+      selectedModel,
+      allFilesMetadata
+    } = req.body;    
+    
+    // Set up Server-Sent Events headers
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Cache-Control'
+    });
+
+    // Send initial connection message
+    res.write(`data: ${JSON.stringify({ 
+      type: 'connected', 
+      message: 'Stream connected successfully',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    // API key validation
+    if (!api_key || typeof api_key !== 'string' || api_key.trim() === '') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'API key is required and must be a valid string'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Validate userPrompt
+    if (!userPrompt || typeof userPrompt !== 'string' || userPrompt.trim() === '') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'User prompt is required and must be a valid string'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Validate selectedModel (only GPT-5 Mini allowed)
+    if (!selectedModel || selectedModel !== 'gpt5-mini') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'Custom file generation only supports GPT-5 Mini model. Please select GPT-5 Mini.'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    const apiKey = api_key.trim();
+
+    // Send processing status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: 'Validating API key...',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    // Find the API key and associated user
+    const apiKeyData = await findApiKeyRecord(apiKey);
+    
+    if (!apiKeyData) {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'Invalid API key'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // ONLY ALLOW PRO USERS
+    if (apiKeyData.users.plan === 'free') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'Custom file generation is only available for Pro plan users. Please upgrade to access this feature.',
+        data: {
+          currentPlan: 'free',
+          requiredPlan: 'pro',
+          feature: 'Custom File Generation'
+        }
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Send processing status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: 'Checking usage limits...',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    // Use the PostgreSQL function for count management
+    const { data: countResult, error: countError } = await supabase
+      .rpc('increment_api_count', {
+        api_name: apiKeyData.name
+      });
+
+    if (countError) {
+      throw countError;
+    }
+
+    // Check if the function indicates limit reached
+    if (!countResult.success) {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: countResult.error,
+        data: {
+          count: countResult.count,
+          limit: countResult.limit,
+          remaining: countResult.limit - countResult.count,
+          plan: apiKeyData.users.plan
+        }
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Validation for required fields
+    if (!projectType || typeof projectType !== 'string') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'Project type is required and must be a valid string'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    if (!projectLanguage || typeof projectLanguage !== 'string') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'Project language is required and must be a valid string'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Send processing status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: 'Creating custom generation prompt...',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+    
+    // Create prompt for custom file generation
+    const prompt = createCustomGenerationPrompt(
+      projectType, 
+      files || [], 
+      projectLanguage, 
+      projectStructure || {}, 
+      userPrompt.trim(),
+      allFilesMetadata || {}
+    );
+
+    // Send processing status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: 'Starting AI processing with streaming...',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+    
+    // Get AI response using the selected model (with streaming)
+    const aiResponse = await callAIForCustomGeneration(prompt, selectedModel, apiKeyData.users.plan, res);
+
+    // Send processing status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: 'AI processing completed. Parsing response...',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    // Parse JSON response (same parsing logic as original)
+    let parsedResponse;
+    try {
+      // Try multiple parsing strategies
+      let jsonContent = '';
+      
+      // Strategy 1: Look for JSON block between ```json and ```
+      const codeBlockMatch = aiResponse.match(/```json\s*([\s\S]*?)\s*```/);
+      if (codeBlockMatch) {
+        jsonContent = codeBlockMatch[1].trim();
+      }
+      
+      // Strategy 2: Look for JSON object starting with { and ending with }
+      if (!jsonContent) {
+        const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          jsonContent = jsonMatch[0];
+        }
+      }
+      
+      // Strategy 3: Try to clean the response and extract JSON
+      if (!jsonContent) {
+        let cleaned = aiResponse
+          .replace(/^[\s\S]*?(?=\{)/, '') // Remove everything before first {
+          .replace(/\}[\s\S]*$/, '}') // Remove everything after last }
+          .trim();
+        
+        if (cleaned.startsWith('{') && cleaned.endsWith('}')) {
+          jsonContent = cleaned;
+        }
+      }
+      
+      // If we found JSON content, try to parse it
+      if (jsonContent) {
+        parsedResponse = JSON.parse(jsonContent);
+      } else {
+        console.error('No JSON content found in AI response');
+        throw new Error('No valid JSON found in AI response');
+      }
+      
+    } catch (parseError) {
+      console.error('JSON parsing failed:', parseError.message);
+      
+      // Try fallback parsing
+      try {
+        let fixedJson = aiResponse
+          .replace(/^[\s\S]*?(\{)/, '$1')
+          .replace(/(\})[\s\S]*$/, '$1')
+          .replace(/,\s*}/g, '}')
+          .replace(/,\s*]/g, ']')
+          .trim();
+        
+        parsedResponse = JSON.parse(fixedJson);
+      } catch (fallbackError) {
+        res.write(`data: ${JSON.stringify({
+          type: 'error',
+          error: 'Failed to parse AI response as JSON',
+          details: {
+            originalError: parseError.message,
+            fallbackError: fallbackError.message,
+            responsePreview: aiResponse.substring(0, 200) + '...'
+          }
+        })}\n\n`);
+        res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+        res.end();
+        return;
+      }
+    }
+
+    // Validate response structure
+    if (!parsedResponse || typeof parsedResponse !== 'object') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'Invalid response structure from AI'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Ensure files array exists
+    if (!parsedResponse.files || !Array.isArray(parsedResponse.files)) {
+      parsedResponse.files = [];
+    }
+
+    // Send final parsed response
+    res.write(`data: ${JSON.stringify({
+      type: 'final',
+      success: true,
+      data: {
+        ...parsedResponse,
+        generationMode: 'custom',
+        usage: {
+          count: countResult.count,
+          limit: countResult.limit,
+          remaining: countResult.remaining,
+          plan: apiKeyData.users.plan
+        }
+      },
+      metadata: {
+        originalProjectType: projectType,
+        projectLanguage: projectLanguage,
+        userPrompt: userPrompt,
+        processingTime: new Date().toISOString(),
+        generationMode: 'custom',
+        apiKeyUser: apiKeyData.name,
+        selectedModel: selectedModel
+      }
+    })}\n\n`);
+
+    // Send completion message
+    res.write(`data: ${JSON.stringify({ 
+      type: 'complete', 
+      message: 'Custom generation completed successfully',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+    
+    res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+    res.end();
+
+  } catch (error) {
+    console.error('Error in custom file generation:', error);
+    
+    // Send error via stream
+    res.write(`data: ${JSON.stringify({
+      type: 'error',
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    })}\n\n`);
+    
+    res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+    res.end();
+  }
+});
+
+//optimize
+function createOptimizationPrompt(projectType, projectLanguage, files) {
+  const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
+  
+  const optimizationPrompt = `You are an expert code optimization specialist. Optimize the provided files for better performance, maintainability, and modern best practices.
+
+**PROJECT SETTINGS:**
+- Type: ${projectType}
+- Language: ${projectLanguage}
+- Extensions: ${fileExtension}
+
+**FILES TO OPTIMIZE:**
+${JSON.stringify(files, null, 2)}
+
+**OPTIMIZATION FOCUS:**
+1. **Performance**: Improve speed, reduce memory usage, optimize algorithms
+2. **Code Quality**: Better structure, error handling, readability
+3. **Modern Practices**: Latest syntax, async patterns, security
+4. **Maintainability**: Clean code, proper documentation, type safety
+
+**RETURN JSON:**
+{
+  "projectType": "${projectType}",
+  "language": "${projectLanguage}",
+  "timestamp": "ISO_DATE_STRING",
+  "totalFilesOptimized": number,
+  "optimization_summary": "Brief description of main optimizations made",
+  "files": [
+    {
+      "path": "file/path${fileExtension}",
+      "content": "COMPLETE_OPTIMIZED_CODE",
+      "improvements": ["key improvement 1", "key improvement 2"],
+      "performanceGains": "brief performance improvement description"
+    }
+  ],
+  "recommendations": ["recommendation 1", "recommendation 2"]
+}
+
+**REQUIREMENTS:**
+✅ Complete working code only
+✅ Preserve all functionality  
+✅ Valid ${projectLanguage} syntax
+✅ No placeholders or TODOs
+✅ Focus on measurable improvements`;
+
+  return optimizationPrompt;
+}
+
+async function callAIForOptimization(prompt, model, plan, res) {
+  // Only allow paid users
+  if (plan === 'free') {
+    throw new Error('File optimization is only available for Pro plan users. Please upgrade to access this feature.');
+  }
+
+  // Only support GPT-5 Mini for optimization
+  if (model !== 'gpt5-mini') {
+    throw new Error('File optimization only supports GPT-5 Mini model. Please select GPT-5 Mini.');
+  }
+
+  // Use OpenAI's official API for GPT-5 Mini
+  try {
+    console.log('Attempting API call with OpenAI GPT-5 Mini for file optimization');
+    
+    const completion = await openai.chat.completions.create({
+      model: "gpt-5-mini",
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an expert code optimization specialist. Analyze code and provide comprehensive optimizations while maintaining functionality. Always return valid JSON responses as requested.'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      stream: true,
+      temperature: 0.1 // Lower temperature for precise optimizations
+    });
+
+    let fullResponse = '';
+
+    // Stream the response
+    for await (const chunk of completion) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      
+      if (content) {
+        fullResponse += content;
+        
+        // Send streaming chunk to frontend
+        res.write(`data: ${JSON.stringify({ 
+          type: 'chunk', 
+          content: content,
+          timestamp: new Date().toISOString()
+        })}\n\n`);
+      }
+    }
+
+    console.log('✅ OpenAI GPT-5 Mini API call successful for optimization');
+    return fullResponse;
+
+  } catch (error) {
+    console.log('❌ OpenAI GPT-5 Mini API call failed:', error.message);
+    throw error;
+  }
+}
+
+app.post('/api/optimize-files', async (req, res) => {
+  try {
+    const { 
+      api_key, 
+      projectType, 
+      files, 
+      projectLanguage, 
+      selectedModel
+    } = req.body;    
+    
+    // Set up Server-Sent Events headers
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Cache-Control'
+    });
+
+    // Send initial connection message
+    res.write(`data: ${JSON.stringify({ 
+      type: 'connected', 
+      message: 'Stream connected successfully',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    // API key validation
+    if (!api_key || typeof api_key !== 'string' || api_key.trim() === '') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'API key is required and must be a valid string'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Validate selectedModel (only GPT-5 Mini allowed)
+    if (!selectedModel || selectedModel !== 'gpt5-mini') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'File optimization only supports GPT-5 Mini model. Please select GPT-5 Mini.'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    const apiKey = api_key.trim();
+
+    // Send processing status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: 'Validating API key...',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    // Find the API key and associated user
+    const apiKeyData = await findApiKeyRecord(apiKey);
+    
+    if (!apiKeyData) {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'Invalid API key'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // ONLY ALLOW PRO USERS
+    if (apiKeyData.users.plan === 'free') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'File optimization is only available for Pro plan users. Please upgrade to access this feature.',
+        data: {
+          currentPlan: 'free',
+          requiredPlan: 'pro',
+          feature: 'File Optimization'
+        }
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Send processing status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: 'Checking usage limits...',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    // Use the PostgreSQL function for count management
+    const { data: countResult, error: countError } = await supabase
+      .rpc('increment_api_count', {
+        api_name: apiKeyData.name
+      });
+
+    if (countError) {
+      throw countError;
+    }
+
+    // Check if the function indicates limit reached
+    if (!countResult.success) {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: countResult.error,
+        data: {
+          count: countResult.count,
+          limit: countResult.limit,
+          remaining: countResult.limit - countResult.count,
+          plan: apiKeyData.users.plan
+        }
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Validation for required fields
+    if (!projectType || typeof projectType !== 'string') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'Project type is required and must be a valid string'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    if (!projectLanguage || typeof projectLanguage !== 'string') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'Project language is required and must be a valid string'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Validation for files
+    if (!files || !Array.isArray(files) || files.length === 0) {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'Files array is required and cannot be empty'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Send processing status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: 'Creating optimization analysis...',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+    
+    // Create prompt for file optimization
+    const prompt = createOptimizationPrompt(
+      projectType, 
+      projectLanguage, 
+      files
+    );
+
+    // Send processing status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: 'Starting AI optimization analysis with streaming...',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+    
+    // Get AI response using GPT-5 Mini (with streaming)
+    const aiResponse = await callAIForOptimization(prompt, selectedModel, apiKeyData.users.plan, res);
+
+    // Send processing status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: 'AI optimization completed. Parsing response...',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    // Parse JSON response (same parsing logic as previous routes)
+    let parsedResponse;
+    try {
+      // Try multiple parsing strategies
+      let jsonContent = '';
+      
+      // Strategy 1: Look for JSON block between ```json and ```
+      const codeBlockMatch = aiResponse.match(/```json\s*([\s\S]*?)\s*```/);
+      if (codeBlockMatch) {
+        jsonContent = codeBlockMatch[1].trim();
+      }
+      
+      // Strategy 2: Look for JSON object starting with { and ending with }
+      if (!jsonContent) {
+        const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          jsonContent = jsonMatch[0];
+        }
+      }
+      
+      // Strategy 3: Try to clean the response and extract JSON
+      if (!jsonContent) {
+        let cleaned = aiResponse
+          .replace(/^[\s\S]*?(?=\{)/, '') // Remove everything before first {
+          .replace(/\}[\s\S]*$/, '}') // Remove everything after last }
+          .trim();
+        
+        if (cleaned.startsWith('{') && cleaned.endsWith('}')) {
+          jsonContent = cleaned;
+        }
+      }
+      
+      // If we found JSON content, try to parse it
+      if (jsonContent) {
+        parsedResponse = JSON.parse(jsonContent);
+      } else {
+        console.error('No JSON content found in AI response');
+        throw new Error('No valid JSON found in AI response');
+      }
+      
+    } catch (parseError) {
+      console.error('JSON parsing failed:', parseError.message);
+      
+      // Try fallback parsing
+      try {
+        let fixedJson = aiResponse
+          .replace(/^[\s\S]*?(\{)/, '$1')
+          .replace(/(\})[\s\S]*$/, '$1')
+          .replace(/,\s*}/g, '}')
+          .replace(/,\s*]/g, ']')
+          .trim();
+        
+        parsedResponse = JSON.parse(fixedJson);
+      } catch (fallbackError) {
+        res.write(`data: ${JSON.stringify({
+          type: 'error',
+          error: 'Failed to parse AI response as JSON',
+          details: {
+            originalError: parseError.message,
+            fallbackError: fallbackError.message,
+            responsePreview: aiResponse.substring(0, 200) + '...'
+          }
+        })}\n\n`);
+        res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+        res.end();
+        return;
+      }
+    }
+
+    // Validate response structure
+    if (!parsedResponse || typeof parsedResponse !== 'object') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'Invalid response structure from AI'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Ensure files array exists
+    if (!parsedResponse.files || !Array.isArray(parsedResponse.files)) {
+      parsedResponse.files = [];
+    }
+
+    // Send final parsed response
+    res.write(`data: ${JSON.stringify({
+      type: 'final',
+      success: true,
+      data: {
+        ...parsedResponse,
+        optimizationMode: true,
+        originalFilesCount: files.length,
+        usage: {
+          count: countResult.count,
+          limit: countResult.limit,
+          remaining: countResult.remaining,
+          plan: apiKeyData.users.plan
+        }
+      },
+      metadata: {
+        originalProjectType: projectType,
+        projectLanguage: projectLanguage,
+        originalFilesProcessed: files.length,
+        processingTime: new Date().toISOString(),
+        optimizationMode: true,
+        apiKeyUser: apiKeyData.name,
+        selectedModel: selectedModel
+      }
+    })}\n\n`);
+
+    // Send completion message
+    res.write(`data: ${JSON.stringify({ 
+      type: 'complete', 
+      message: 'File optimization completed successfully',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+    
+    res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+    res.end();
+
+  } catch (error) {
+    console.error('Error in file optimization:', error);
+    
+    // Send error via stream
+    res.write(`data: ${JSON.stringify({
+      type: 'error',
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    })}\n\n`);
+    
+    res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+    res.end();
+  }
+});
+
 
 app.post('/api/subscription/cancel', async (req, res) => {
   try {
