@@ -533,6 +533,12 @@ function createRefactoringPrompt(projectType, files, projectLanguage, packageJso
   5. Package.json scripts that use packages
   6. Indirect dependencies (packages used by other packages)
   7. Development tools used in build process
+
+  **CONSERVATIVE APPROACH:**
+  - Only suggest removing packages that are clearly unused
+  - When in doubt, keep the package
+  - Group related packages together in uninstall commands
+  - Provide clear reasoning for why each package can be removed
   
   **PROJECT METADATA ANALYSIS:**
   Complete project metadata for reference (includes ALL files, not just selected ones):
@@ -552,11 +558,6 @@ function createRefactoringPrompt(projectType, files, projectLanguage, packageJso
 
   **IMPORTANT:** If allFilesMetadata is empty {}, ignore all metadata-related instructions and proceed with standard refactoring.
 
-  **CONSERVATIVE APPROACH:**
-  - Only suggest removing packages that are clearly unused
-  - When in doubt, keep the package
-  - Group related packages together in uninstall commands
-  - Provide clear reasoning for why each package can be removed
   
   **SECURITY ANALYSIS - EXTRACT HARDCODED SECRETS:**
   Analyze all code files and identify any hardcoded secrets, API keys, tokens, or sensitive data.
@@ -607,29 +608,11 @@ function createRefactoringPrompt(projectType, files, projectLanguage, packageJso
      - **Unused Exports**: Remove exports that aren't imported by any other file
      - **Unused Hooks**: Detect and remove unused React hooks such as useState, useEffect, useRef, etc., that are declared but not used in functional components.
      - **Import Consolidation**: Combine multiple imports from same module
-
-  6. **Modern Best Practices:**
-     ${projectLanguage === 'TypeScript' ? `
-     - Add comprehensive TypeScript types and interfaces
-     - Use proper generics and utility types
-     - Implement strict null checks
-     - Add JSDoc comments for all public APIs
-     ` : `
-     - Use modern JavaScript features (destructuring, arrow functions)
-     - Add comprehensive JSDoc comments
-     - Implement proper error handling
-     `}
   
-  7. **Framework-Specific (${projectType}):**
-     - Use modern React hooks instead of class components
-     - Implement proper component structure
-     - Follow React/Next.js best practices
-     - Optimize performance with useMemo, useCallback where needed
-  
-  8. **Code Documentation:**
-     - Add comprehensive JSDoc comments
+  6. **Code Documentation:**
+     - Add comprehensive  comments
      - Document all function parameters and return values
-     - Add inline comments for complex logic
+     - Add  comments for complex logic
   
   **FILE STRUCTURE REQUIREMENTS:**
   - Include ALL original files (completely rewritten)
