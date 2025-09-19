@@ -1242,7 +1242,6 @@ async function callAIForCustomGeneration(prompt, model, plan, res) {
         }
       ],
       stream: true,
-      temperature: 0.2 // Slightly higher for creativity but still controlled
     });
 
     let fullResponse = '';
@@ -1683,7 +1682,6 @@ async function callAIForOptimization(prompt, model, plan, res) {
         }
       ],
       stream: true,
-      temperature: 0.1 // Lower temperature for precise optimizations
     });
 
     let fullResponse = '';
