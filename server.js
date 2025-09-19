@@ -700,16 +700,6 @@ function createRefactoringPrompt(projectType, files, projectLanguage, packageJso
   return refactoringPrompt;
 }
 async function callDeepSeekAPI(prompt, model, plan, res) {
-  // Check user plan and model restrictions
-  if (plan === 'free' && model !== 'deepseek-r1') {
-    throw new Error('Free plan users can only use DeepSeek R1 model. Please upgrade to Pro for access to other models.');
-  }
-
-  // PAID USERS: Block DeepSeek R1 access
-  if (plan !== 'free' && model === 'deepseek-r1') {
-    throw new Error('DeepSeek R1 is only available for free plan users. Pro users have access to GPT-5 Mini.');
-  }
-
   // Determine the actual model to use
   if (model === 'deepseek-r1') {
     // This should only execute for free users now
@@ -926,6 +916,27 @@ app.post('/api/process-code', async (req, res) => {
         return;
       }
     }
+
+    // Add this validation block right after finding the API key and BEFORE increment_api_count
+if (apiKeyData.users.plan === 'free' && selectedModel !== 'deepseek-r1') {
+  res.write(`data: ${JSON.stringify({
+    type: 'error',
+    error: 'Free plan users can only use DeepSeek R1 model. Please upgrade to Pro for access to other models.'
+  })}\n\n`);
+  res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+  res.end();
+  return;
+}
+
+if (apiKeyData.users.plan !== 'free' && selectedModel === 'deepseek-r1') {
+  res.write(`data: ${JSON.stringify({
+    type: 'error', 
+    error: 'DeepSeek R1 is only available for free plan users. Pro users have access to GPT-5 Mini.'
+  })}\n\n`);
+  res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+  res.end();
+  return;
+}
 
     // USE THE POSTGRESQL FUNCTION FOR COUNT MANAGEMENT
     const { data: countResult, error: countError } = await supabase
@@ -1240,16 +1251,6 @@ ${userPrompt}
   return customPrompt;
 }
 async function callAIForCustomGeneration(prompt, model, plan, res) {
-  // Only allow paid users
-  if (plan === 'free') {
-    throw new Error('Custom file generation is only available for Pro plan users. Please upgrade to access this feature.');
-  }
-
-  // Only support GPT-5 Mini for custom generation
-  if (model !== 'gpt5-mini') {
-    throw new Error('Custom file generation only supports GPT-5 Mini model. Please select GPT-5 Mini.');
-  }
-
   // Use OpenAI's official API for GPT-5 Mini
   try {
     console.log('Attempting API call with OpenAI GPT-5 Mini for custom generation');
@@ -1402,6 +1403,16 @@ app.post('/api/generate-custom', async (req, res) => {
       message: 'Checking usage limits...',
       timestamp: new Date().toISOString()
     })}\n\n`);
+
+    if (selectedModel !== 'gpt5-mini') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'This feature only supports GPT-5 Mini model. Please select GPT-5 Mini.'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
 
     // Use the PostgreSQL function for count management
     const { data: countResult, error: countError } = await supabase
@@ -1680,15 +1691,7 @@ ${JSON.stringify(files, null, 2)}
 }
 
 async function callAIForOptimization(prompt, model, plan, res) {
-  // Only allow paid users
-  if (plan === 'free') {
-    throw new Error('File optimization is only available for Pro plan users. Please upgrade to access this feature.');
-  }
 
-  // Only support GPT-5 Mini for optimization
-  if (model !== 'gpt5-mini') {
-    throw new Error('File optimization only supports GPT-5 Mini model. Please select GPT-5 Mini.');
-  }
 
   // Use OpenAI's official API for GPT-5 Mini
   try {
@@ -1828,6 +1831,16 @@ app.post('/api/optimize-files', async (req, res) => {
       message: 'Checking usage limits...',
       timestamp: new Date().toISOString()
     })}\n\n`);
+
+    if (selectedModel !== 'gpt5-mini') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'This feature only supports GPT-5 Mini model. Please select GPT-5 Mini.'
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
 
     // Use the PostgreSQL function for count management
     const { data: countResult, error: countError } = await supabase
