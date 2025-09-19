@@ -1177,11 +1177,17 @@ ${JSON.stringify(packageJson, null, 2)}
 **PROJECT METADATA:**
 ${JSON.stringify(allFilesMetadata, null, 2)}
 
-**EXISTING FILES:**
+**EXISTING FILES FOR CONTEXT:**
 ${JSON.stringify(files, null, 2)}
 
 **USER REQUIREMENTS:**
 ${userPrompt}
+
+**CRITICAL FILE HANDLING INSTRUCTIONS:**
+1. **Modified Files**: If user asks to modify/rewrite a file, include it with isRewritten: true and complete code.do a complete rewrite if user ask to modify a file
+2. **New Files**: If creating new files, include them with isNew: true and complete code  
+3. **Unchanged Files**: List all existing files you're NOT modifying in the "unchangedFiles" array
+4. **Only include complete code for files you're actually changing or creating**
 
 **GENERATION RULES:**
 1. **Security**: Use process.env variables for API keys/secrets (format: API_KEY_NAME="put-your-key-here")
@@ -1200,7 +1206,7 @@ ${userPrompt}
   "timestamp": "ISO_DATE_STRING",
   "totalFiles": number,
   "totalWords": number,
-  "changes_summary": "Description of generated files and functionality",
+  "changes_summary": "Description of generated/modified files and functionality",
   "secrets": {
     "API_KEY_NAME": "put-your-key-here",
     "DATABASE_URL": "put-your-db-url-here"
@@ -1213,6 +1219,11 @@ ${userPrompt}
   "originalFilesToDelete": [
     "path/to/file/being/rewritten.js",
     "path/to/obsolete/file.js"
+  ],
+  "unchangedFiles": [
+    "path/to/file/not/modified.js",
+    "path/to/another/unchanged/file.tsx",
+    "components/ExistingComponent.jsx"
   ],
   "files": [
     {
@@ -1246,13 +1257,13 @@ ${userPrompt}
 ✅ Follow existing project patterns
 ✅ Rewrite existing files completely when modifications requested
 ✅ Support both install and uninstall package commands
-✅ Extract hardcoded secrets into environment variables`;
+✅ Extract hardcoded secrets into environment variables
+✅ List all unchanged files in unchangedFiles array
+✅ Only include files in "files" array if creating new or completely rewriting them`;
 
   return customPrompt;
 }
 
-
-//optimize
 function createOptimizationPrompt(projectType, projectLanguage, files) {
   const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
   
@@ -1271,6 +1282,7 @@ ${JSON.stringify(files, null, 2)}
 2. **Code Quality**: Better structure, error handling, readability
 3. **Modern Practices**: Latest syntax, async patterns, security
 4. **Maintainability**: Clean code, proper documentation, type safety
+5. **Manual Action Comments**: Insert comments at the start of files (if needed) to guide the user on required manual steps — e.g., moving secrets to environment variables, installing missing dependencies, or configuring external services.
 
 **RETURN JSON:**
 {
