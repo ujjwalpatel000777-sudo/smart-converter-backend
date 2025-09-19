@@ -1263,312 +1263,53 @@ ${userPrompt}
 
   return customPrompt;
 }
-
-function createOptimizationPrompt(projectType, projectLanguage, files) {
-  const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
-  
-  const optimizationPrompt = `You are an expert code optimization specialist. Optimize the provided files for better performance, maintainability, and modern best practices.
-
-**PROJECT SETTINGS:**
-- Type: ${projectType}
-- Language: ${projectLanguage}
-- Extensions: ${fileExtension}
-
-**FILES TO OPTIMIZE:**
-${JSON.stringify(files, null, 2)}
-
-**OPTIMIZATION FOCUS:**
-1. **Performance**: Improve speed, reduce memory usage, optimize algorithms
-2. **Code Quality**: Better structure, error handling, readability
-3. **Modern Practices**: Latest syntax, async patterns, security
-4. **Maintainability**: Clean code, proper documentation, type safety
-5. **Manual Action Comments**: Insert comments at the start of files (if needed) to guide the user on required manual steps — e.g., moving secrets to environment variables, installing missing dependencies, or configuring external services.
-
-**RETURN JSON:**
-{
-  "projectType": "${projectType}",
-  "language": "${projectLanguage}",
-  "timestamp": "ISO_DATE_STRING",
-  "totalFilesOptimized": number,
-  "optimization_summary": "Brief description of main optimizations made",
-  "files": [
-    {
-      "path": "file/path${fileExtension}",
-      "content": "COMPLETE_OPTIMIZED_CODE",
-      "improvements": ["key improvement 1", "key improvement 2"],
-      "performanceGains": "brief performance improvement description"
-    }
-  ],
-  "recommendations": ["recommendation 1", "recommendation 2"]
-}
-
-**REQUIREMENTS:**
-✅ Complete working code only
-✅ Preserve all functionality  
-✅ Valid ${projectLanguage} syntax
-✅ No placeholders or TODOs
-✅ Focus on measurable improvements`;
-
-  return optimizationPrompt;
-}
-
-
-
-// Updated callAIForCustomGeneration function
 async function callAIForCustomGeneration(prompt, model, plan, res) {
-  // Determine the actual model to use based on plan
-  if (model === 'deepseek-r1') {
-    // For free users
-    const actualModel = "deepseek/deepseek-r1:free";
+  // Use OpenAI's official API for GPT-5 Mini
+  try {
+    console.log('Attempting API call with OpenAI GPT-5 Mini for custom generation');
     
-    let lastError;
-    
-    for (let i = 0; i < openrouterClients.length; i++) {
-      const client = openrouterClients[i];
-      const keyNumber = i + 1;
+    const completion = await openai.chat.completions.create({
+      model: "gpt-5-mini",
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an expert software development assistant. Generate complete, working code files based on user requirements. Always return valid JSON responses as requested.'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      stream: true,
+    });
+
+    let fullResponse = '';
+
+    // Stream the response
+    for await (const chunk of completion) {
+      const content = chunk.choices[0]?.delta?.content || '';
       
-      try {
-        console.log(`Attempting API call with DEEPSEEK_API_KEY_${keyNumber} for custom generation (Free user)`);
+      if (content) {
+        fullResponse += content;
         
-        const completion = await client.chat.completions.create({
-          model: actualModel,
-          messages: [
-            {
-              role: 'system',
-              content: 'You are an expert software development assistant. Generate complete, working code files based on user requirements. Always return valid JSON responses as requested.'
-            },
-            {
-              role: 'user',
-              content: prompt
-            }
-          ],
-          temperature: 0.0,
-          stream: true
-        });
-
-        let fullResponse = '';
-
-        // Stream the response
-        for await (const chunk of completion) {
-          const content = chunk.choices[0]?.delta?.content || '';
-          
-          if (content) {
-            fullResponse += content;
-            
-            // Send streaming chunk to frontend
-            res.write(`data: ${JSON.stringify({ 
-              type: 'chunk', 
-              content: content,
-              timestamp: new Date().toISOString()
-            })}\n\n`);
-          }
-        }
-
-        console.log(`✅ API call successful with DEEPSEEK_API_KEY_${keyNumber} for custom generation (Free user)`);
-        return fullResponse;
-
-      } catch (error) {
-        console.log(`❌ API call failed with DEEPSEEK_API_KEY_${keyNumber}:`, error.message);
-        lastError = error;
-
-        // Check if it's a rate limit error
-        const isRateLimit = error.message?.toLowerCase().includes('rate limit') || 
-                           error.message?.toLowerCase().includes('quota') ||
-                           error.message?.toLowerCase().includes('429') ||
-                           error.status === 429;
-
-        if (isRateLimit) {
-          console.log(`🔄 Rate limit hit with key ${keyNumber}, trying next key...`);
-          continue; // Try next key
-        } else {
-          // If it's not a rate limit error, don't try other keys
-          throw error;
-        }
+        // Send streaming chunk to frontend
+        res.write(`data: ${JSON.stringify({ 
+          type: 'chunk', 
+          content: content,
+          timestamp: new Date().toISOString()
+        })}\n\n`);
       }
     }
 
-    // If we get here, all DeepSeek keys failed
-    console.error('❌ All DeepSeek API keys failed');
-    throw new Error(`All DeepSeek API keys failed. Last error: ${lastError?.message || 'Unknown error'}`);
-    
-  } else if (model === 'gpt5-mini') {
-    // GPT-5 Mini for paid users only
-    try {
-      console.log('Attempting API call with OpenAI GPT-5 Mini for custom generation (Pro user)');
-      
-      const completion = await openai.chat.completions.create({
-        model: "gpt-5-mini",
-        messages: [
-          {
-            role: 'system',
-            content: 'You are an expert software development assistant. Generate complete, working code files based on user requirements. Always return valid JSON responses as requested.'
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        stream: true
-      });
+    console.log('✅ OpenAI GPT-5 Mini API call successful for custom generation');
+    return fullResponse;
 
-      let fullResponse = '';
-
-      // Stream the response
-      for await (const chunk of completion) {
-        const content = chunk.choices[0]?.delta?.content || '';
-        
-        if (content) {
-          fullResponse += content;
-          
-          // Send streaming chunk to frontend
-          res.write(`data: ${JSON.stringify({ 
-            type: 'chunk', 
-            content: content,
-            timestamp: new Date().toISOString()
-          })}\n\n`);
-        }
-      }
-
-      console.log('✅ OpenAI GPT-5 Mini API call successful for custom generation (Pro user)');
-      return fullResponse;
-
-    } catch (error) {
-      console.log('❌ OpenAI GPT-5 Mini API call failed:', error.message);
-      throw error;
-    }
-  } else {
-    throw new Error(`Unsupported model: ${model}. Available models: DeepSeek R1 (free users), GPT-5 Mini (pro users)`);
+  } catch (error) {
+    console.log('❌ OpenAI GPT-5 Mini API call failed:', error.message);
+    throw error;
   }
 }
 
-// Updated callAIForOptimization function
-async function callAIForOptimization(prompt, model, plan, res) {
-  // Determine the actual model to use based on plan
-  if (model === 'deepseek-r1') {
-    // For free users
-    const actualModel = "deepseek/deepseek-r1:free";
-    
-    let lastError;
-    
-    for (let i = 0; i < openrouterClients.length; i++) {
-      const client = openrouterClients[i];
-      const keyNumber = i + 1;
-      
-      try {
-        console.log(`Attempting API call with DEEPSEEK_API_KEY_${keyNumber} for optimization (Free user)`);
-        
-        const completion = await client.chat.completions.create({
-          model: actualModel,
-          messages: [
-            {
-              role: 'system',
-              content: 'You are an expert code optimization specialist. Analyze code and provide comprehensive optimizations while maintaining functionality. Always return valid JSON responses as requested.'
-            },
-            {
-              role: 'user',
-              content: prompt
-            }
-          ],
-          temperature: 0.0,
-          stream: true
-        });
-
-        let fullResponse = '';
-
-        // Stream the response
-        for await (const chunk of completion) {
-          const content = chunk.choices[0]?.delta?.content || '';
-          
-          if (content) {
-            fullResponse += content;
-            
-            // Send streaming chunk to frontend
-            res.write(`data: ${JSON.stringify({ 
-              type: 'chunk', 
-              content: content,
-              timestamp: new Date().toISOString()
-            })}\n\n`);
-          }
-        }
-
-        console.log(`✅ API call successful with DEEPSEEK_API_KEY_${keyNumber} for optimization (Free user)`);
-        return fullResponse;
-
-      } catch (error) {
-        console.log(`❌ API call failed with DEEPSEEK_API_KEY_${keyNumber}:`, error.message);
-        lastError = error;
-
-        // Check if it's a rate limit error
-        const isRateLimit = error.message?.toLowerCase().includes('rate limit') || 
-                           error.message?.toLowerCase().includes('quota') ||
-                           error.message?.toLowerCase().includes('429') ||
-                           error.status === 429;
-
-        if (isRateLimit) {
-          console.log(`🔄 Rate limit hit with key ${keyNumber}, trying next key...`);
-          continue; // Try next key
-        } else {
-          // If it's not a rate limit error, don't try other keys
-          throw error;
-        }
-      }
-    }
-
-    // If we get here, all DeepSeek keys failed
-    console.error('❌ All DeepSeek API keys failed');
-    throw new Error(`All DeepSeek API keys failed. Last error: ${lastError?.message || 'Unknown error'}`);
-    
-  } else if (model === 'gpt5-mini') {
-    // GPT-5 Mini for paid users only
-    try {
-      console.log('Attempting API call with OpenAI GPT-5 Mini for optimization (Pro user)');
-      
-      const completion = await openai.chat.completions.create({
-        model: "gpt-5-mini",
-        messages: [
-          {
-            role: 'system',
-            content: 'You are an expert code optimization specialist. Analyze code and provide comprehensive optimizations while maintaining functionality. Always return valid JSON responses as requested.'
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        stream: true
-      });
-
-      let fullResponse = '';
-
-      // Stream the response
-      for await (const chunk of completion) {
-        const content = chunk.choices[0]?.delta?.content || '';
-        
-        if (content) {
-          fullResponse += content;
-          
-          // Send streaming chunk to frontend
-          res.write(`data: ${JSON.stringify({ 
-            type: 'chunk', 
-            content: content,
-            timestamp: new Date().toISOString()
-          })}\n\n`);
-        }
-      }
-
-      console.log('✅ OpenAI GPT-5 Mini API call successful for optimization (Pro user)');
-      return fullResponse;
-
-    } catch (error) {
-      console.log('❌ OpenAI GPT-5 Mini API call failed:', error.message);
-      throw error;
-    }
-  } else {
-    throw new Error(`Unsupported model: ${model}. Available models: DeepSeek R1 (free users), GPT-5 Mini (pro users)`);
-  }
-}
-
-// Updated /api/generate-custom endpoint
 app.post('/api/generate-custom', async (req, res) => {
   try {
     const { 
@@ -1620,11 +1361,11 @@ app.post('/api/generate-custom', async (req, res) => {
       return;
     }
 
-    // Validate selectedModel
-    if (!selectedModel || typeof selectedModel !== 'string') {
+    // Validate selectedModel (only GPT-5 Mini allowed)
+    if (!selectedModel || selectedModel !== 'gpt5-mini') {
       res.write(`data: ${JSON.stringify({
         type: 'error',
-        error: 'selectedModel is required and must be a valid string'
+        error: 'Custom file generation only supports GPT-5 Mini model. Please select GPT-5 Mini.'
       })}\n\n`);
       res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
       res.end();
@@ -1653,6 +1394,22 @@ app.post('/api/generate-custom', async (req, res) => {
       return;
     }
 
+    // ONLY ALLOW PRO USERS
+    if (apiKeyData.users.plan === 'free') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'Custom file generation is only available for Pro plan users. Please upgrade to access this feature.',
+        data: {
+          currentPlan: 'free',
+          requiredPlan: 'pro',
+          feature: 'Custom File Generation'
+        }
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
     // Send processing status
     res.write(`data: ${JSON.stringify({ 
       type: 'status', 
@@ -1660,41 +1417,10 @@ app.post('/api/generate-custom', async (req, res) => {
       timestamp: new Date().toISOString()
     })}\n\n`);
 
-    // FOR FREE USERS: Check lifetime limit before processing
-    if (apiKeyData.users.plan === 'free') {
-      if (apiKeyData.count >= 3) {
-        res.write(`data: ${JSON.stringify({
-          type: 'error',
-          error: 'Free plan limit reached. You have used all 3 lifetime requests. Please upgrade to Pro plan for more usage.',
-          data: {
-            count: apiKeyData.count,
-            limit: 3,
-            remaining: 0,
-            plan: 'free',
-            isLifetimeLimit: true
-          }
-        })}\n\n`);
-        res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-        res.end();
-        return;
-      }
-    }
-
-    // Model validation based on plan
-    if (apiKeyData.users.plan === 'free' && selectedModel !== 'deepseek-r1') {
+    if (selectedModel !== 'gpt5-mini') {
       res.write(`data: ${JSON.stringify({
         type: 'error',
-        error: 'Free plan users can only use DeepSeek R1 model. Please upgrade to Pro for access to other models.'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    if (apiKeyData.users.plan !== 'free' && selectedModel === 'deepseek-r1') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error', 
-        error: 'DeepSeek R1 is only available for free plan users. Pro users have access to GPT-5 Mini.'
+        error: 'This feature only supports GPT-5 Mini model. Please select GPT-5 Mini.'
       })}\n\n`);
       res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
       res.end();
@@ -1929,7 +1655,104 @@ app.post('/api/generate-custom', async (req, res) => {
   }
 });
 
-// Updated /api/optimize-files endpoint
+//optimize
+function createOptimizationPrompt(projectType, projectLanguage, files) {
+  const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
+  
+  const optimizationPrompt = `You are an expert code optimization specialist. Optimize the provided files for better performance, maintainability, and modern best practices.
+
+**PROJECT SETTINGS:**
+- Type: ${projectType}
+- Language: ${projectLanguage}
+- Extensions: ${fileExtension}
+
+**FILES TO OPTIMIZE:**
+${JSON.stringify(files, null, 2)}
+
+**OPTIMIZATION FOCUS:**
+1. **Performance**: Improve speed, reduce memory usage, optimize algorithms
+2. **Code Quality**: Better structure, error handling, readability
+3. **Modern Practices**: Latest syntax, async patterns, security
+4. **Maintainability**: Clean code, proper documentation, type safety
+5. **Manual Action Comments**: Insert comments at the start of files (if needed) to guide the user on required manual steps — e.g., moving secrets to environment variables, installing missing dependencies, or configuring external services.
+
+**RETURN JSON:**
+{
+  "projectType": "${projectType}",
+  "language": "${projectLanguage}",
+  "timestamp": "ISO_DATE_STRING",
+  "totalFilesOptimized": number,
+  "optimization_summary": "Brief description of main optimizations made",
+  "files": [
+    {
+      "path": "file/path${fileExtension}",
+      "content": "COMPLETE_OPTIMIZED_CODE",
+      "improvements": ["key improvement 1", "key improvement 2"],
+      "performanceGains": "brief performance improvement description"
+    }
+  ],
+  "recommendations": ["recommendation 1", "recommendation 2"]
+}
+
+**REQUIREMENTS:**
+✅ Complete working code only
+✅ Preserve all functionality  
+✅ Valid ${projectLanguage} syntax
+✅ No placeholders or TODOs
+✅ Focus on measurable improvements`;
+
+  return optimizationPrompt;
+}
+
+async function callAIForOptimization(prompt, model, plan, res) {
+
+
+  // Use OpenAI's official API for GPT-5 Mini
+  try {
+    console.log('Attempting API call with OpenAI GPT-5 Mini for file optimization');
+    
+    const completion = await openai.chat.completions.create({
+      model: "gpt-5-mini",
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an expert code optimization specialist. Analyze code and provide comprehensive optimizations while maintaining functionality. Always return valid JSON responses as requested.'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      stream: true,
+    });
+
+    let fullResponse = '';
+
+    // Stream the response
+    for await (const chunk of completion) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      
+      if (content) {
+        fullResponse += content;
+        
+        // Send streaming chunk to frontend
+        res.write(`data: ${JSON.stringify({ 
+          type: 'chunk', 
+          content: content,
+          timestamp: new Date().toISOString()
+        })}\n\n`);
+      }
+    }
+
+    console.log('✅ OpenAI GPT-5 Mini API call successful for optimization');
+    return fullResponse;
+
+  } catch (error) {
+    console.log('❌ OpenAI GPT-5 Mini API call failed:', error.message);
+    throw error;
+  }
+}
+
 app.post('/api/optimize-files', async (req, res) => {
   try {
     const { 
@@ -1967,11 +1790,11 @@ app.post('/api/optimize-files', async (req, res) => {
       return;
     }
 
-    // Validate selectedModel
-    if (!selectedModel || typeof selectedModel !== 'string') {
+    // Validate selectedModel (only GPT-5 Mini allowed)
+    if (!selectedModel || selectedModel !== 'gpt5-mini') {
       res.write(`data: ${JSON.stringify({
         type: 'error',
-        error: 'selectedModel is required and must be a valid string'
+        error: 'File optimization only supports GPT-5 Mini model. Please select GPT-5 Mini.'
       })}\n\n`);
       res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
       res.end();
@@ -2000,6 +1823,22 @@ app.post('/api/optimize-files', async (req, res) => {
       return;
     }
 
+    // ONLY ALLOW PRO USERS
+    if (apiKeyData.users.plan === 'free') {
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        error: 'File optimization is only available for Pro plan users. Please upgrade to access this feature.',
+        data: {
+          currentPlan: 'free',
+          requiredPlan: 'pro',
+          feature: 'File Optimization'
+        }
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      res.end();
+      return;
+    }
+
     // Send processing status
     res.write(`data: ${JSON.stringify({ 
       type: 'status', 
@@ -2007,41 +1846,10 @@ app.post('/api/optimize-files', async (req, res) => {
       timestamp: new Date().toISOString()
     })}\n\n`);
 
-    // FOR FREE USERS: Check lifetime limit before processing
-    if (apiKeyData.users.plan === 'free') {
-      if (apiKeyData.count >= 3) {
-        res.write(`data: ${JSON.stringify({
-          type: 'error',
-          error: 'Free plan limit reached. You have used all 3 lifetime requests. Please upgrade to Pro plan for more usage.',
-          data: {
-            count: apiKeyData.count,
-            limit: 3,
-            remaining: 0,
-            plan: 'free',
-            isLifetimeLimit: true
-          }
-        })}\n\n`);
-        res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-        res.end();
-        return;
-      }
-    }
-
-    // Model validation based on plan
-    if (apiKeyData.users.plan === 'free' && selectedModel !== 'deepseek-r1') {
+    if (selectedModel !== 'gpt5-mini') {
       res.write(`data: ${JSON.stringify({
         type: 'error',
-        error: 'Free plan users can only use DeepSeek R1 model. Please upgrade to Pro for access to other models.'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    if (apiKeyData.users.plan !== 'free' && selectedModel === 'deepseek-r1') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error', 
-        error: 'DeepSeek R1 is only available for free plan users. Pro users have access to GPT-5 Mini.'
+        error: 'This feature only supports GPT-5 Mini model. Please select GPT-5 Mini.'
       })}\n\n`);
       res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
       res.end();
@@ -2128,7 +1936,7 @@ app.post('/api/optimize-files', async (req, res) => {
       timestamp: new Date().toISOString()
     })}\n\n`);
     
-    // Get AI response using the selected model (with streaming)
+    // Get AI response using GPT-5 Mini (with streaming)
     const aiResponse = await callAIForOptimization(prompt, selectedModel, apiKeyData.users.plan, res);
 
     // Send processing status
