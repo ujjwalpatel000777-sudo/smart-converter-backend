@@ -1178,7 +1178,9 @@ ${userPrompt}
 3. **Quality**: Complete, working, production-ready code only
 4. **Dependencies**: Suggest new packages if needed via npm install commands
 5. **Config Changes**: If config file changes are needed (webpack, tsconfig, etc.), create a README.md with instructions instead of modifying config files directly
-
+6. **File Modifications**: If user asks to modify existing files, completely rewrite those files and include them in response
+7. **Package Management**: Support both npm install and npm uninstall commands as needed
+8. **Secret Detection**: Extract any hardcoded secrets/API keys found in code and replace with environment variables
 
 **RESPONSE FORMAT:**
 {
@@ -1194,7 +1196,12 @@ ${userPrompt}
   },
   "npmInstallCommands": [
     "npm install package-name-1 package-name-2",
-    "npm install --save-dev dev-package-name"
+    "npm install --save-dev dev-package-name",
+    "npm uninstall old-package-name"
+  ],
+  "originalFilesToDelete": [
+    "path/to/file/being/rewritten.js",
+    "path/to/obsolete/file.js"
   ],
   "files": [
     {
@@ -1203,6 +1210,13 @@ ${userPrompt}
       "isNew": true,
       "isRewritten": false,
       "changes": "Description of what this file does"
+    },
+    {
+      "path": "existing/file/to/modify${fileExtension}",
+      "content": "COMPLETE_REWRITTEN_CODE",
+      "isNew": false,
+      "isRewritten": true,
+      "changes": "Complete rewrite of existing file with modifications"
     },
     {
       "path": "CONFIG_CHANGES.md",
@@ -1218,11 +1232,13 @@ ${userPrompt}
 ✅ Complete working code only
 ✅ No placeholders or TODOs
 ✅ Use environment variables for secrets
-✅ Follow existing project patterns`;
+✅ Follow existing project patterns
+✅ Rewrite existing files completely when modifications requested
+✅ Support both install and uninstall package commands
+✅ Extract hardcoded secrets into environment variables`;
 
   return customPrompt;
 }
-
 async function callAIForCustomGeneration(prompt, model, plan, res) {
   // Only allow paid users
   if (plan === 'free') {
