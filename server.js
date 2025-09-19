@@ -1177,6 +1177,8 @@ ${userPrompt}
 2. **Integration**: Follow existing project patterns and structure
 3. **Quality**: Complete, working, production-ready code only
 4. **Dependencies**: Suggest new packages if needed via npm install commands
+5. **Config Changes**: If config file changes are needed (webpack, tsconfig, etc.), create a README.md with instructions instead of modifying config files directly
+
 
 **RESPONSE FORMAT:**
 {
@@ -1201,6 +1203,13 @@ ${userPrompt}
       "isNew": true,
       "isRewritten": false,
       "changes": "Description of what this file does"
+    },
+    {
+      "path": "CONFIG_CHANGES.md",
+      "content": "config files code",
+      "isNew": true,
+      "isRewritten": false,
+      "changes": "Instructions for manual config file changes"
     }
   ]
 }
