@@ -1658,7 +1658,7 @@ app.post('/api/generate-custom', async (req, res) => {
 //optimize
 function createOptimizationPrompt(projectType, projectLanguage, files) {
   const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
-  
+     
   const optimizationPrompt = `You are an expert code optimization specialist. Optimize the provided files for better performance, maintainability, and modern best practices.
 
 **PROJECT SETTINGS:**
@@ -1674,7 +1674,8 @@ ${JSON.stringify(files, null, 2)}
 2. **Code Quality**: Better structure, error handling, readability
 3. **Modern Practices**: Latest syntax, async patterns, security
 4. **Maintainability**: Clean code, proper documentation, type safety
-5. **Manual Action Comments**: Insert comments at the start of files (if needed) to guide the user on required manual steps — e.g., moving secrets to environment variables, installing missing dependencies, or configuring external services.
+5. **Clean Imports**: Remove unused imports and dead code
+6. **Secrets Handling**: Keep any hardcoded secrets as-is in the code
 
 **RETURN JSON:**
 {
@@ -1699,6 +1700,8 @@ ${JSON.stringify(files, null, 2)}
 ✅ Preserve all functionality  
 ✅ Valid ${projectLanguage} syntax
 ✅ No placeholders or TODOs
+✅ Remove unused imports
+✅ Keep hardcoded secrets unchanged
 ✅ Focus on measurable improvements`;
 
   return optimizationPrompt;
