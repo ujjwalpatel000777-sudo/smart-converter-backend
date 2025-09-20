@@ -1676,6 +1676,8 @@ ${JSON.stringify(files, null, 2)}
 4. **Maintainability**: Clean code, proper documentation, type safety
 5. **Clean Imports**: Remove unused imports and dead code
 6. **Secrets Handling**: Keep any hardcoded secrets as-is in the code
+7. **Complete Rewrite**: Return only complete file code, rewrite entire code from scratch
+
 
 **RETURN JSON:**
 {
