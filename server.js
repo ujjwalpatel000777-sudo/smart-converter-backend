@@ -493,6 +493,15 @@ function endSSE(res) {
 async function validateAndProcessRequest(req, res, requiredFields = []) {
   const { api_key, selectedModel, userApiKey } = req.body;
   
+  // DEBUG LOGGING
+  console.log('=== VALIDATION DEBUG ===');
+  console.log('Received api_key:', api_key ? 'PROVIDED' : 'MISSING');
+  console.log('Received selectedModel:', selectedModel);
+  console.log('Received userApiKey:', userApiKey ? 'PROVIDED' : 'MISSING');
+  console.log('userApiKey type:', typeof userApiKey);
+  console.log('userApiKey value (first 10 chars):', userApiKey ? userApiKey.substring(0, 10) + '...' : 'null/undefined');
+  console.log('Request body keys:', Object.keys(req.body));
+  
   // Setup SSE headers
   setupSSEHeaders(res);
   sendSSEMessage(res, 'connected', { message: 'Stream connected successfully' });
@@ -523,7 +532,7 @@ async function validateAndProcessRequest(req, res, requiredFields = []) {
   const apiKey = api_key.trim();
   sendSSEMessage(res, 'status', { message: 'Validating API key...' });
 
-  // UNIFIED APPROACH: Use findApiKeyRecord for both free and pro users
+  // Find the API key and associated user
   const apiKeyData = await findApiKeyRecord(apiKey);
   
   if (!apiKeyData) {
@@ -531,6 +540,9 @@ async function validateAndProcessRequest(req, res, requiredFields = []) {
     endSSE(res);
     return null;
   }
+
+  console.log('User plan:', apiKeyData.users.plan);
+  console.log('Selected model:', selectedModel);
 
   // Model access validation based on plan
   if (selectedModel === 'gpt5-mini' && apiKeyData.users.plan === 'free') {
@@ -549,23 +561,36 @@ async function validateAndProcessRequest(req, res, requiredFields = []) {
   // For free users using DeepSeek or Qwen models, require their OpenRouter API key
   if (apiKeyData.users.plan === 'free' && 
       (selectedModel === 'deepseek-r1' || selectedModel === 'qwen3-coder')) {
+    
+    console.log('Free user detected using free model - checking userApiKey...');
+    console.log('userApiKey exists:', !!userApiKey);
+    console.log('userApiKey type:', typeof userApiKey);
+    console.log('userApiKey trimmed length:', userApiKey ? userApiKey.trim().length : 0);
+    
     if (!userApiKey || typeof userApiKey !== 'string' || userApiKey.trim() === '') {
+      console.log('ERROR: userApiKey validation failed');
       sendSSEMessage(res, 'error', { 
         error: 'Free users must provide their OpenRouter API key to use DeepSeek R1 or Qwen3 Coder models.',
         data: {
           currentPlan: 'free',
           requiredField: 'userApiKey',
-          message: 'Please provide your OpenRouter API key in the userApiKey field'
+          message: 'Please provide your OpenRouter API key in the userApiKey field',
+          received: {
+            userApiKey: userApiKey ? 'PROVIDED_BUT_INVALID' : 'NOT_PROVIDED',
+            selectedModel: selectedModel
+          }
         }
       });
       endSSE(res);
       return null;
     }
+    
+    console.log('userApiKey validation passed for free user');
   }
 
   sendSSEMessage(res, 'status', { message: 'Checking usage limits...' });
 
-  // Use the PostgreSQL function for count management (works for both free and pro)
+  // Use the PostgreSQL function for count management
   const { data: countResult, error: countError } = await supabase
     .rpc('increment_api_count', {
       api_name: apiKeyData.name
@@ -589,6 +614,8 @@ async function validateAndProcessRequest(req, res, requiredFields = []) {
     endSSE(res);
     return null;
   }
+
+  console.log('Validation successful, returning data...');
 
   return {
     apiKeyData,
