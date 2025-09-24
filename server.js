@@ -1636,8 +1636,8 @@ app.post('/api/generate-api-key', async (req, res) => {
         });
       }
 
-
-
+      // FIX: Properly trim the API key before using it
+      const trimmedApiKey = userProvidedApiKey.trim();
       newApiKey = trimmedApiKey;
       hashedApiKey = await hashApiKey(newApiKey);
     } else if (userPlan === 'pro') {
