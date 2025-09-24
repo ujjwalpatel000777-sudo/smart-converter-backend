@@ -1636,14 +1636,7 @@ app.post('/api/generate-api-key', async (req, res) => {
         });
       }
 
-      // Validate API key format (optional - you can add more specific validation)
-      const trimmedApiKey = userProvidedApiKey.trim();
-      if (trimmedApiKey.length < 10) { // Basic length check
-        return res.status(400).json({
-          success: false,
-          error: 'Invalid API key format'
-        });
-      }
+
 
       newApiKey = trimmedApiKey;
       hashedApiKey = await hashApiKey(newApiKey);
