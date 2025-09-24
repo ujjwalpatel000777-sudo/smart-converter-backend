@@ -1902,7 +1902,7 @@ app.post('/api/get-user-api-info', async (req, res) => {
     const { data: userData, error: userError } = await supabase
       .from('users')
       .select('plan, subscription_status, subscription_id')
-      .eq('email', userName)  // Make sure this matches your users table email column
+      .eq('name', userName)  // Make sure this matches your users table email column
       .single();
 
     if (userError) {
