@@ -254,20 +254,20 @@ async function handleSubscriptionPastDue(subscription) {
     return;
   }
 
-  // Set count to 3 (used all free requests) for past due users
+  // Set count to 0 (used all free requests) for past due users
   const { error: countError } = await supabase
     .from('api_keys')
     .update({ 
-      count: 3,
+      count: 0,
       last_reset_date: new Date().toISOString().split('T')[0]
     })
     .eq('name', user.name);
 
   if (countError) {
-    console.log('ERROR: Failed to set count to 3 for past due user');
+    console.log('ERROR: Failed to set count to 0 for past due user');
     console.log('Count error:', JSON.stringify(countError, null, 2));
   } else {
-    console.log('SUCCESS: Count set to 3 for past due user (no free requests remaining)');
+    console.log('SUCCESS: Count set to 0 for past due user (no free requests remaining)');
   }
 
   console.log('SUCCESS: Subscription marked as past due and downgraded to free for subscription:', subscription.id);
@@ -348,7 +348,7 @@ async function handleSubscriptionCancelled(subscription) {
     return;
   }
 
-  // Reset count to 0 for cancelled users (give them 3 fresh free requests)
+  // Reset count to 0 for cancelled users (give them 50 fresh free requests)
   const { error: countError } = await supabase
     .from('api_keys')
     .update({ 
@@ -361,7 +361,7 @@ async function handleSubscriptionCancelled(subscription) {
     console.log('ERROR: Failed to reset count for cancelled user');
     console.log('Count error:', JSON.stringify(countError, null, 2));
   } else {
-    console.log('SUCCESS: Count reset to 0 for cancelled user (3 free requests available)');
+    console.log('SUCCESS: Count reset to 0 for cancelled user (50 free requests available)');
   }
 
   console.log('SUCCESS: Subscription cancelled and downgraded to free for subscription:', subscription.id);
@@ -398,20 +398,20 @@ async function handleSubscriptionPaused(subscription) {
     return;
   }
 
-  // Set count to 3 (used all free requests) for paused users
+  // Set count to 0 (used all free requests) for paused users
   const { error: countError } = await supabase
     .from('api_keys')
     .update({ 
-      count: 3,
+      count: 0,
       last_reset_date: new Date().toISOString().split('T')[0]
     })
     .eq('name', user.name);
 
   if (countError) {
-    console.log('ERROR: Failed to set count to 3 for paused user');
+    console.log('ERROR: Failed to set count to 0 for paused user');
     console.log('Count error:', JSON.stringify(countError, null, 2));
   } else {
-    console.log('SUCCESS: Count set to 3 for paused user (no free requests remaining)');
+    console.log('SUCCESS: Count set to 0 for paused user (no free requests remaining)');
   }
 
   console.log('SUCCESS: Subscription paused for subscription:', subscription.id);
@@ -1834,21 +1834,6 @@ app.post('/api/update-count', async (req, res) => {
       return res.status(401).json({
         success: false,
         error: 'Invalid API key'
-      });
-    }
-
-    // FOR FREE USERS: Check if they've reached lifetime limit
-    if (apiKeyData.users.plan === 'free' && apiKeyData.count >= 3) {
-      return res.status(429).json({
-        success: false,
-        error: 'Free plan limit reached. You have used all 3 lifetime requests. Please upgrade to Pro plan.',
-        data: {
-          count: apiKeyData.count,
-          limit: 3,
-          remaining: 0,
-          plan: 'free',
-          isLifetimeLimit: true
-        }
       });
     }
 
