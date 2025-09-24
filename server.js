@@ -1717,6 +1717,7 @@ app.post('/api/generate-api-key', async (req, res) => {
     // Free users already have their key, so we don't need to return it
     if (userPlan === 'pro') {
       responseData.api_key = newApiKey;
+      responseData.hasApiKey = true; // Add this line
     }
 
     res.json({
