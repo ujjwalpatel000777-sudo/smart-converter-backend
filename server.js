@@ -32,31 +32,6 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Initialize deepseek AI
-// Initialize OpenRouter client
-const openrouterClients = [
-  new OpenAI({
-    baseURL: "https://openrouter.ai/api/v1",
-    apiKey: process.env.DEEPSEEK_API_KEY_1,
-  }),
-  new OpenAI({
-    baseURL: "https://openrouter.ai/api/v1", 
-    apiKey: process.env.DEEPSEEK_API_KEY_2,
-  }),
-  new OpenAI({
-    baseURL: "https://openrouter.ai/api/v1",
-    apiKey: process.env.DEEPSEEK_API_KEY_3,
-  }),
-  new OpenAI({
-    baseURL: "https://openrouter.ai/api/v1",
-    apiKey: process.env.DEEPSEEK_API_KEY_4,
-  }),
-  new OpenAI({
-    baseURL: "https://openrouter.ai/api/v1",
-    apiKey: process.env.DEEPSEEK_API_KEY_5,
-  })
-];
-
 // Middleware
 app.use(cors());
 
@@ -492,11 +467,350 @@ async function handleSubscriptionResumed(subscription) {
   console.log('SUCCESS: Subscription resumed for subscription:', subscription.id);
 }
 
-//refactor
+function setupSSEHeaders(res) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Cache-Control'
+  });
+}
+
+function sendSSEMessage(res, type, data) {
+  res.write(`data: ${JSON.stringify({ 
+    type, 
+    ...data,
+    timestamp: new Date().toISOString()
+  })}\n\n`);
+}
+
+function endSSE(res) {
+  res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+  res.end();
+}
+
+async function validateAndProcessRequest(req, res, requiredFields = []) {
+  const { api_key, selectedModel, userApiKey } = req.body;
+  
+  // Setup SSE headers
+  setupSSEHeaders(res);
+  sendSSEMessage(res, 'connected', { message: 'Stream connected successfully' });
+
+  // API key validation
+  if (!api_key || typeof api_key !== 'string' || api_key.trim() === '') {
+    sendSSEMessage(res, 'error', { error: 'API key is required and must be a valid string' });
+    endSSE(res);
+    return null;
+  }
+
+  // Validate selectedModel
+  if (!selectedModel || typeof selectedModel !== 'string') {
+    sendSSEMessage(res, 'error', { error: 'selectedModel is required and must be a valid string' });
+    endSSE(res);
+    return null;
+  }
+
+  // Validate required fields
+  for (const field of requiredFields) {
+    if (!req.body[field]) {
+      sendSSEMessage(res, 'error', { error: `${field} is required` });
+      endSSE(res);
+      return null;
+    }
+  }
+
+  const apiKey = api_key.trim();
+  sendSSEMessage(res, 'status', { message: 'Validating API key...' });
+
+  // Find the API key and associated user
+  const apiKeyData = await findApiKeyRecord(apiKey);
+  
+  if (!apiKeyData) {
+    sendSSEMessage(res, 'error', { error: 'Invalid API key' });
+    endSSE(res);
+    return null;
+  }
+
+  // Model access validation based on plan
+  if (selectedModel === 'gpt5-mini' && apiKeyData.users.plan === 'free') {
+    sendSSEMessage(res, 'error', { 
+      error: 'GPT-5 Mini is only available for Pro plan users. Free users can use DeepSeek R1 or Qwen3 Coder.',
+      data: {
+        currentPlan: 'free',
+        availableModels: ['deepseek-r1', 'qwen3-coder'],
+        proModels: ['gpt5-mini']
+      }
+    });
+    endSSE(res);
+    return null;
+  }
+
+  // For free users using DeepSeek or Qwen models, require their OpenRouter API key
+  if (apiKeyData.users.plan === 'free' && 
+      (selectedModel === 'deepseek-r1' || selectedModel === 'qwen3-coder')) {
+    if (!userApiKey || typeof userApiKey !== 'string' || userApiKey.trim() === '') {
+      sendSSEMessage(res, 'error', { 
+        error: 'Free users must provide their OpenRouter API key to use DeepSeek R1 or Qwen3 Coder models.',
+        data: {
+          currentPlan: 'free',
+          requiredField: 'userApiKey',
+          message: 'Please provide your OpenRouter API key in the userApiKey field'
+        }
+      });
+      endSSE(res);
+      return null;
+    }
+  }
+
+  sendSSEMessage(res, 'status', { message: 'Checking usage limits...' });
+
+  // Use the PostgreSQL function for count management
+  const { data: countResult, error: countError } = await supabase
+    .rpc('increment_api_count', {
+      api_name: apiKeyData.name
+    });
+
+  if (countError) {
+    throw countError;
+  }
+
+  // Check if the function indicates limit reached
+  if (!countResult.success) {
+    sendSSEMessage(res, 'error', {
+      error: countResult.error,
+      data: {
+        count: countResult.count,
+        limit: countResult.limit,
+        remaining: countResult.limit - countResult.count,
+        plan: apiKeyData.users.plan
+      }
+    });
+    endSSE(res);
+    return null;
+  }
+
+  return {
+    apiKeyData,
+    countResult,
+    selectedModel,
+    userApiKey: userApiKey?.trim() // Pass user's API key if provided
+  };
+}
+
+async function callAIModel(prompt, model, res, userPlan = 'pro', userApiKey = null) {
+  if (model === 'deepseek-r1') {
+    const actualModel = "deepseek/deepseek-r1:free";
+    
+    if (userPlan === 'free') {
+      // Free users: use their provided API key
+      if (!userApiKey) {
+        throw new Error('User API key is required for free users');
+      }
+      
+      console.log('Using user-provided API key for free user');
+      const userClient = new OpenAI({
+        baseURL: "https://openrouter.ai/api/v1",
+        apiKey: userApiKey,
+      });
+      
+      try {
+        const completion = await userClient.chat.completions.create({
+          model: actualModel,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an expert software development assistant. Always return valid JSON responses as requested.'
+            },
+            {
+              role: 'user',
+              content: prompt
+            }
+          ],
+          temperature: 0.0,
+          stream: true
+        });
+
+        let fullResponse = '';
+        for await (const chunk of completion) {
+          const content = chunk.choices[0]?.delta?.content || '';
+          if (content) {
+            fullResponse += content;
+            sendSSEMessage(res, 'chunk', { content });
+          }
+        }
+
+        console.log('API call successful with user-provided key');
+        return fullResponse;
+
+      } catch (error) {
+        console.log('API call failed with user-provided key:', error.message);
+        throw new Error(`DeepSeek API call failed with your API key: ${error.message}`);
+      }
+    } else {
+      // Pro users shouldn't use DeepSeek - they have GPT-5 Mini
+      throw new Error('Pro users should use GPT-5 Mini model');
+    }
+    
+  } else if (model === 'qwen3-coder') {
+    const actualModel = "qwen/qwen3-coder:free";
+    
+    if (userPlan === 'free') {
+      // Free users: use their provided API key
+      if (!userApiKey) {
+        throw new Error('User API key is required for free users');
+      }
+      
+      console.log('Using user-provided API key for Qwen3 Coder (free user)');
+      const userClient = new OpenAI({
+        baseURL: "https://openrouter.ai/api/v1",
+        apiKey: userApiKey,
+      });
+      
+      try {
+        const completion = await userClient.chat.completions.create({
+          model: actualModel,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an expert software development assistant. Always return valid JSON responses as requested.'
+            },
+            {
+              role: 'user',
+              content: prompt
+            }
+          ],
+          temperature: 0.0,
+          stream: true
+        });
+
+        let fullResponse = '';
+        for await (const chunk of completion) {
+          const content = chunk.choices[0]?.delta?.content || '';
+          if (content) {
+            fullResponse += content;
+            sendSSEMessage(res, 'chunk', { content });
+          }
+        }
+
+        console.log('Qwen3 Coder API call successful with user-provided key');
+        return fullResponse;
+
+      } catch (error) {
+        console.log('Qwen3 Coder API call failed with user-provided key:', error.message);
+        throw new Error(`Qwen3 Coder API call failed with your API key: ${error.message}`);
+      }
+    } else {
+      // Pro users shouldn't use Qwen3 Coder - they have GPT-5 Mini
+      throw new Error('Pro users should use GPT-5 Mini model');
+    }
+    
+  } else if (model === 'gpt5-mini') {
+    // Only for Pro users
+    if (userPlan === 'free') {
+      throw new Error('GPT-5 Mini is only available for Pro users');
+    }
+    
+    try {
+      console.log('Attempting API call with OpenAI GPT-5 Mini');
+      
+      const completion = await openai.chat.completions.create({
+        model: "gpt-5-mini",
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert software development assistant. Always return valid JSON responses as requested.'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        stream: true
+      });
+
+      let fullResponse = '';
+      for await (const chunk of completion) {
+        const content = chunk.choices[0]?.delta?.content || '';
+        if (content) {
+          fullResponse += content;
+          sendSSEMessage(res, 'chunk', { content });
+        }
+      }
+
+      console.log('OpenAI GPT-5 Mini API call successful');
+      return fullResponse;
+
+    } catch (error) {
+      console.log('OpenAI GPT-5 Mini API call failed:', error.message);
+      throw error;
+    }
+  } else {
+    throw new Error(`Unsupported model: ${model}. Available models: deepseek-r1, qwen3-coder (free), gpt5-mini (pro)`);
+  }
+}
+
+function parseAIResponse(aiResponse) {
+  try {
+    let jsonContent = '';
+    
+    // Strategy 1: Look for JSON block between ```json and ```
+    const codeBlockMatch = aiResponse.match(/```json\s*([\s\S]*?)\s*```/);
+    if (codeBlockMatch) {
+      jsonContent = codeBlockMatch[1].trim();
+    }
+    
+    // Strategy 2: Look for JSON object starting with { and ending with }
+    if (!jsonContent) {
+      const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        jsonContent = jsonMatch[0];
+      }
+    }
+    
+    // Strategy 3: Try to clean the response and extract JSON
+    if (!jsonContent) {
+      let cleaned = aiResponse
+        .replace(/^[\s\S]*?(?=\{)/, '')
+        .replace(/\}[\s\S]*$/, '}')
+        .trim();
+      
+      if (cleaned.startsWith('{') && cleaned.endsWith('}')) {
+        jsonContent = cleaned;
+      }
+    }
+    
+    if (jsonContent) {
+      return JSON.parse(jsonContent);
+    } else {
+      throw new Error('No valid JSON found in AI response');
+    }
+    
+  } catch (parseError) {
+    // Try fallback parsing
+    try {
+      let fixedJson = aiResponse
+        .replace(/^[\s\S]*?(\{)/, '$1')
+        .replace(/(\})[\s\S]*$/, '$1')
+        .replace(/,\s*}/g, '}')
+        .replace(/,\s*]/g, ']')
+        .trim();
+      
+      return JSON.parse(fixedJson);
+    } catch (fallbackError) {
+      throw new Error(`Failed to parse AI response: ${parseError.message}`);
+    }
+  }
+}
+
+// ====================
+// PROMPT CREATION FUNCTIONS
+// ====================
+
 function createRefactoringPrompt(projectType, files, projectLanguage, packageJson, allFilesMetadata) {
   const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
   
-  const refactoringPrompt = `You are an expert software refactoring assistant. You will COMPLETELY REWRITE all provided files with improved code.
+  return `You are an expert software refactoring assistant. You will COMPLETELY REWRITE all provided files with improved code.
 
   **IMPORTANT PROJECT SETTINGS:**
   - Project Type: ${projectType}
@@ -524,101 +838,19 @@ function createRefactoringPrompt(projectType, files, projectLanguage, packageJso
   - turbo, lerna (monorepo tools)
   - husky, lint-staged (git hooks)
   
-  **PACKAGE USAGE DETECTION:**
-  Look for packages being used in:
-  1. Direct imports: import x from 'package-name'
-  2. Require statements: require('package-name')
-  3. Dynamic imports: import('package-name')
-  4. Configuration files that reference packages
-  5. Package.json scripts that use packages
-  6. Indirect dependencies (packages used by other packages)
-  7. Development tools used in build process
-
-  **CONSERVATIVE APPROACH:**
-  - Only suggest removing packages that are clearly unused
-  - When in doubt, keep the package
-  - Group related packages together in uninstall commands
-  - Provide clear reasoning for why each package can be removed
-  
   **PROJECT METADATA ANALYSIS:**
-  Complete project metadata for reference (includes ALL files, not just selected ones):
+  Complete project metadata for reference:
   ${JSON.stringify(allFilesMetadata, null, 2)}
 
-   **METADATA USAGE INSTRUCTIONS:**
-  1. **Cross-Reference Check**: Before removing any function, variable, or component from selected files, check if it's imported/used in OTHER files via the metadata
-  2. **Name Collision Avoidance**: When creating new functions, variables, or components, check metadata to ensure names don't clash with existing ones across the entire project
-  3. **Import Dependency Tracking**: Use metadata to understand the dependency graph - if you're refactoring a file that exports something, check which other files import it
-  4. **Safe Removal**: Only remove exports/functions/variables if metadata shows they're not imported anywhere else in the project
-  5. **Intelligent Renaming**: If renaming something that's exported, you'll know from metadata which files need import updates (but only modify the files provided to you)
-
-  **CROSS-FILE IMPACT ANALYSIS:**
-  - Before deleting any export, check allFilesMetadata to see if it's imported elsewhere
-  - When adding new exports, ensure names don't conflict with existing ones in the project
-  - Use metadata to understand the broader context of the files you're refactoring
-
-  **IMPORTANT:** If allFilesMetadata is empty {}, ignore all metadata-related instructions and proceed with standard refactoring.
-
-  
   **SECURITY ANALYSIS - EXTRACT HARDCODED SECRETS:**
   Analyze all code files and identify any hardcoded secrets, API keys, tokens, or sensitive data.
-  Look for patterns like:
-  - API keys (starting with sk-, pk-, etc.)
-  - Database URLs with credentials
-  - JWT tokens
-  - OAuth secrets
-  - Third-party service tokens
-  - Email/SMTP credentials
-  - Any hardcoded passwords or secrets
   
   **COMPLETE REWRITE INSTRUCTIONS:**
-  
   🔄 **TOTAL REPLACEMENT APPROACH:**
   - All provided files will be DELETED and RECREATED from scratch
   - You must provide COMPLETE, WORKING code for every file
   - Maintain ALL existing functionality while improving code quality
-  - Create additional utility/helper files as needed
   - Replace ALL hardcoded secrets with process.env variables
-  
-  **Refactoring Rules to Apply:**
-  
-  1. **Security First:** 
-     - Replace ALL hardcoded secrets with process.env.VARIABLE_NAME
-     - Use descriptive environment variable names
-  
-  2. **Naming Conventions:** 
-     - Use camelCase for variables and functions
-     - Use PascalCase for classes and components
-     - Use UPPER_SNAKE_CASE for constants and env vars
-  
-  3. **Modularization:** 
-     - Break large functions (>50 lines) into smaller functions
-     - Extract reusable logic into separate utility files
-     - Create shared components for repeated UI patterns
-  
-  4. **Code Organization:**
-     - Create proper file structure (utils/, components/, constants/)
-     - Extract constants and configuration into separate files
-     - Group related functions into modules
-
-  5. **DEAD CODE AND IMPORT REMOVAL:**
-     - **Unused Functions**: Identify and remove functions that are defined but never called
-     - **Unused Variables**: Remove variables that are declared but never used
-     - **Unused Parameters**: Remove function parameters that aren't used in function body
-     - **Unused Imports**: Remove all imports that aren't actually used in the file
-     - **Unused Exports**: Remove exports that aren't imported by any other file
-     - **Unused Hooks**: Detect and remove unused React hooks such as useState, useEffect, useRef, etc., that are declared but not used in functional components.
-     - **Import Consolidation**: Combine multiple imports from same module
-  
-  6. **Code Documentation:**
-     - Add comprehensive  comments
-     - Document all function parameters and return values
-     - Add  comments for complex logic
-  
-  **FILE STRUCTURE REQUIREMENTS:**
-  - Include ALL original files (completely rewritten)
-  - Create NEW files for extracted utilities/components
-  - Use logical directory structure
-  - Update ALL import/export statements to work with new structure
   
   **ORIGINAL FILES TO COMPLETELY REWRITE:**
   ${JSON.stringify({ files }, null, 2)}
@@ -633,9 +865,7 @@ function createRefactoringPrompt(projectType, files, projectLanguage, packageJso
     "totalWords": number,
     "changes_summary": "Comprehensive description of all improvements made",
     "secrets": {
-      "API_KEY": "actual-hardcoded-value-found",
-      "DATABASE_URL": "actual-db-url-with-credentials",
-      "JWT_SECRET": "actual-jwt-token"
+      "API_KEY": "actual-hardcoded-value-found"
     },
     "packageAnalysis": {
       "totalDependencies": number,
@@ -648,16 +878,10 @@ function createRefactoringPrompt(projectType, files, projectLanguage, packageJso
         "name": "package-name-1",
         "type": "dependency",
         "reason": "Not imported or used anywhere in the codebase"
-      },
-      {
-        "name": "package-name-2", 
-        "type": "devDependency",
-        "reason": "Development tool no longer needed after refactoring"
       }
     ],
     "npmUninstallCommands": [
-      "npm uninstall package-name-1 package-name-2",
-      "npm uninstall --save-dev dev-package-name"
+      "npm uninstall package-name-1 package-name-2"
     ],
     "originalFilesToDelete": [
       ${files.map(f => `"${f.path}"`).join(',\n      ')}
@@ -680,491 +904,13 @@ function createRefactoringPrompt(projectType, files, projectLanguage, packageJso
   ✅ ALL files must contain COMPLETE, WORKING, PRODUCTION-READY code
   ✅ ZERO placeholders, TODO comments, or incomplete functions
   ✅ ALL functionality from original files must be preserved
-  ✅ All import statements must reference correct file paths
-  ✅ Code must follow ${projectLanguage} syntax perfectly
-  ✅ Response must be valid JSON with exact structure above
-  ✅ Extract ALL hardcoded secrets into the "secrets" object
-  ✅ Replace hardcoded values with process.env variables in code
-  ✅ Provide conservative unused package analysis with clear reasoning
-  ✅ Group npm uninstall commands logically for easy execution
-  
-  **FAILURE CONDITIONS TO AVOID:**
-  ❌ No incomplete code or placeholder comments
-  ❌ No missing imports or broken references
-  ❌ No syntax errors or compilation issues
-  ❌ No functionality loss from original code
-  ❌ No missed hardcoded secrets
-  ❌ No removal of essential packages
-  ❌ No unclear reasoning for package removal suggestions`;
-
-  return refactoringPrompt;
-}
-async function callDeepSeekAPI(prompt, model, plan, res) {
-  // Determine the actual model to use
-  if (model === 'deepseek-r1') {
-    // This should only execute for free users now
-    const actualModel = "deepseek/deepseek-r1:free";
-    
-    let lastError;
-    
-    for (let i = 0; i < openrouterClients.length; i++) {
-      const client = openrouterClients[i];
-      const keyNumber = i + 1;
-      
-      try {
-        console.log(`Attempting API call with DEEPSEEK_API_KEY_${keyNumber} (Free user)`);
-        
-        const completion = await client.chat.completions.create({
-          model: actualModel,
-          messages: [
-            {
-              role: 'system',
-              content: 'You are an expert software refactoring assistant. Always return valid JSON responses as requested.'
-            },
-            {
-              role: 'user',
-              content: prompt
-            }
-          ],
-          temperature: 0.0,
-          stream: true
-        });
-
-        let fullResponse = '';
-
-        // Stream the response
-        for await (const chunk of completion) {
-          const content = chunk.choices[0]?.delta?.content || '';
-          
-          if (content) {
-            fullResponse += content;
-            
-            // Send streaming chunk to frontend
-            res.write(`data: ${JSON.stringify({ 
-              type: 'chunk', 
-              content: content,
-              timestamp: new Date().toISOString()
-            })}\n\n`);
-          }
-        }
-
-        console.log(`✅ API call successful with DEEPSEEK_API_KEY_${keyNumber} (Free user)`);
-        return fullResponse;
-
-      } catch (error) {
-        console.log(`❌ API call failed with DEEPSEEK_API_KEY_${keyNumber}:`, error.message);
-        lastError = error;
-
-        // Check if it's a rate limit error
-        const isRateLimit = error.message?.toLowerCase().includes('rate limit') || 
-                           error.message?.toLowerCase().includes('quota') ||
-                           error.message?.toLowerCase().includes('429') ||
-                           error.status === 429;
-
-        if (isRateLimit) {
-          console.log(`🔄 Rate limit hit with key ${keyNumber}, trying next key...`);
-          continue; // Try next key
-        } else {
-          // If it's not a rate limit error, don't try other keys
-          throw error;
-        }
-      }
-    }
-
-    // If we get here, all DeepSeek keys failed
-    console.error('❌ All DeepSeek API keys failed');
-    throw new Error(`All DeepSeek API keys failed. Last error: ${lastError?.message || 'Unknown error'}`);
-    
-  } else if (model === 'gpt5-mini') {
-    // GPT-5 Mini for paid users only
-    try {
-      console.log('Attempting API call with OpenAI GPT-5 Mini (Pro user)');
-      
-      const completion = await openai.chat.completions.create({
-        model: "gpt-5-mini",
-        messages: [
-          {
-            role: 'system',
-            content: 'You are an expert software refactoring assistant. Always return valid JSON responses as requested.'
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        stream: true
-      });
-
-      let fullResponse = '';
-
-      // Stream the response
-      for await (const chunk of completion) {
-        const content = chunk.choices[0]?.delta?.content || '';
-        
-        if (content) {
-          fullResponse += content;
-          
-          // Send streaming chunk to frontend
-          res.write(`data: ${JSON.stringify({ 
-            type: 'chunk', 
-            content: content,
-            timestamp: new Date().toISOString()
-          })}\n\n`);
-        }
-      }
-
-      console.log('✅ OpenAI GPT-5 Mini API call successful (Pro user)');
-      return fullResponse;
-
-    } catch (error) {
-      console.log('❌ OpenAI GPT-5 Mini API call failed:', error.message);
-      throw error;
-    }
-  } else {
-    throw new Error(`Unsupported model: ${model}. Available models: DeepSeek R1 (free users), GPT-5 Mini (pro users)`);
-  }
+  ✅ Response must be valid JSON with exact structure above`;
 }
 
-
-app.post('/api/process-code', async (req, res) => {
-  try {
-    const { api_key, projectType, files, totalFiles, totalWords, workspacePath, dependencies, projectLanguage, packageJson, selectedModel, allFilesMetadata } = req.body;    
-    
-    // Set up Server-Sent Events headers
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Cache-Control'
-    });
-
-    // Send initial connection message
-    res.write(`data: ${JSON.stringify({ 
-      type: 'connected', 
-      message: 'Stream connected successfully',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-
-    // API key validation
-    if (!api_key || typeof api_key !== 'string' || api_key.trim() === '') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'API key is required and must be a valid string'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Validate selectedModel
-    if (!selectedModel || typeof selectedModel !== 'string') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'selectedModel is required and must be a valid string'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    const apiKey = api_key.trim();
-
-    // Send processing status
-    res.write(`data: ${JSON.stringify({ 
-      type: 'status', 
-      message: 'Validating API key...',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-
-    // Find the API key and associated user (using hash comparison)
-    const apiKeyData = await findApiKeyRecord(apiKey);
-    
-    if (!apiKeyData) {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'Invalid API key'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Send processing status
-    res.write(`data: ${JSON.stringify({ 
-      type: 'status', 
-      message: 'Checking usage limits...',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-
-    // FOR FREE USERS: Check lifetime limit before processing
-    if (apiKeyData.users.plan === 'free') {
-      if (apiKeyData.count >= 3) {
-        res.write(`data: ${JSON.stringify({
-          type: 'error',
-          error: 'Free plan limit reached. You have used all 3 lifetime requests. Please upgrade to Pro plan for more usage.',
-          data: {
-            count: apiKeyData.count,
-            limit: 3,
-            remaining: 0,
-            plan: 'free',
-            isLifetimeLimit: true
-          }
-        })}\n\n`);
-        res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-        res.end();
-        return;
-      }
-    }
-
-    // Add this validation block right after finding the API key and BEFORE increment_api_count
-if (apiKeyData.users.plan === 'free' && selectedModel !== 'deepseek-r1') {
-  res.write(`data: ${JSON.stringify({
-    type: 'error',
-    error: 'Free plan users can only use DeepSeek R1 model. Please upgrade to Pro for access to other models.'
-  })}\n\n`);
-  res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-  res.end();
-  return;
-}
-
-if (apiKeyData.users.plan !== 'free' && selectedModel === 'deepseek-r1') {
-  res.write(`data: ${JSON.stringify({
-    type: 'error', 
-    error: 'DeepSeek R1 is only available for free plan users. Pro users have access to GPT-5 Mini.'
-  })}\n\n`);
-  res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-  res.end();
-  return;
-}
-
-    // USE THE POSTGRESQL FUNCTION FOR COUNT MANAGEMENT
-    const { data: countResult, error: countError } = await supabase
-      .rpc('increment_api_count', {
-        api_name: apiKeyData.name
-      });
-
-    if (countError) {
-      throw countError;
-    }
-
-    // Check if the function indicates limit reached or other error
-    if (!countResult.success) {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: countResult.error,
-        data: {
-          count: countResult.count,
-          limit: countResult.limit,
-          remaining: countResult.limit - countResult.count,
-          plan: apiKeyData.users.plan
-        }
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Validation for files...
-    if (!files || !Array.isArray(files) || files.length === 0) {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'Invalid input: files array is required and cannot be empty'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Validation for packageJson
-    if (!packageJson || typeof packageJson !== 'object') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'Invalid input: packageJson is required and must be an object'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Send processing status
-    res.write(`data: ${JSON.stringify({ 
-      type: 'status', 
-      message: 'Creating refactoring prompt...',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-    
-    // Create prompt for complete rewrite
-    const prompt = createRefactoringPrompt(projectType, files, projectLanguage, packageJson, allFilesMetadata);
-
-    // Send processing status
-    res.write(`data: ${JSON.stringify({ 
-      type: 'status', 
-      message: 'Starting AI processing with streaming...',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-    
-    // Get AI response using the selected model (with streaming) - PASS THE USER PLAN
-    const aiResponse = await callDeepSeekAPI(prompt, selectedModel, apiKeyData.users.plan, res);
-
-    // Send processing status
-    res.write(`data: ${JSON.stringify({ 
-      type: 'status', 
-      message: 'AI processing completed. Parsing response...',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-
-    // IMPROVED JSON PARSING WITH BETTER ERROR HANDLING (same as original)
-    let parsedResponse;
-    try {
-      // Try multiple parsing strategies
-      let jsonContent = '';
-      
-      // Strategy 1: Look for JSON block between ```json and ```
-      const codeBlockMatch = aiResponse.match(/```json\s*([\s\S]*?)\s*```/);
-      if (codeBlockMatch) {
-        jsonContent = codeBlockMatch[1].trim();
-      }
-      
-      // Strategy 2: Look for JSON object starting with { and ending with }
-      if (!jsonContent) {
-        const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          jsonContent = jsonMatch[0];
-        }
-      }
-      
-      // Strategy 3: Try to clean the response and extract JSON
-      if (!jsonContent) {
-        let cleaned = aiResponse
-          .replace(/^[\s\S]*?(?=\{)/, '') // Remove everything before first {
-          .replace(/\}[\s\S]*$/, '}') // Remove everything after last }
-          .trim();
-        
-        if (cleaned.startsWith('{') && cleaned.endsWith('}')) {
-          jsonContent = cleaned;
-        }
-      }
-      
-      // If we found JSON content, try to parse it
-      if (jsonContent) {
-        parsedResponse = JSON.parse(jsonContent);
-      } else {
-        console.error('No JSON content found in AI response');
-        console.error('Full response:', aiResponse);
-        throw new Error('No valid JSON found in AI response');
-      }
-      
-    } catch (parseError) {
-      console.error('JSON parsing failed:', parseError.message);
-      console.error('Raw response:', aiResponse);
-      
-      // Try one more fallback - attempt to fix common JSON issues
-      try {
-        let fixedJson = aiResponse
-          .replace(/^[\s\S]*?(\{)/, '$1') // Remove everything before first {
-          .replace(/(\})[\s\S]*$/, '$1') // Remove everything after last }
-          .replace(/,\s*}/g, '}') // Remove trailing commas
-          .replace(/,\s*]/g, ']') // Remove trailing commas in arrays
-          .trim();
-        
-        parsedResponse = JSON.parse(fixedJson);
-      } catch (fallbackError) {
-        console.error('Fallback parsing also failed:', fallbackError.message);
-        
-        // Send error via stream and end
-        res.write(`data: ${JSON.stringify({
-          type: 'error',
-          error: 'Failed to parse AI response as JSON',
-          details: {
-            originalError: parseError.message,
-            fallbackError: fallbackError.message,
-            responsePreview: aiResponse.substring(0, 200) + '...',
-            suggestion: 'The AI response format was unexpected. This might be a temporary issue. Please try again.'
-          }
-        })}\n\n`);
-        res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-        res.end();
-        return;
-      }
-    }
-
-    // Validate that we have the expected structure
-    if (!parsedResponse || typeof parsedResponse !== 'object') {
-      console.error('Parsed response is not an object:', parsedResponse);
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'Invalid response structure from AI',
-        details: 'Expected JSON object but got: ' + typeof parsedResponse
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Validate required fields
-    if (!parsedResponse.files || !Array.isArray(parsedResponse.files)) {
-      console.warn('Response missing files array, creating empty array');
-      parsedResponse.files = [];
-    }
-
-    // Send final parsed response
-    res.write(`data: ${JSON.stringify({
-      type: 'final',
-      success: true,
-      data: {
-        ...parsedResponse,
-        replacementMode: true,
-        originalFilesProcessed: files.length,
-        usage: {
-          count: countResult.count,
-          limit: countResult.limit,
-          remaining: countResult.remaining,
-          plan: apiKeyData.users.plan
-        }
-      },
-      metadata: {
-        originalProjectType: projectType,
-        originalTotalFiles: totalFiles,
-        originalTotalWords: totalWords,
-        projectLanguage: projectLanguage,
-        processingTime: new Date().toISOString(),
-        replacementMode: true,
-        apiKeyUser: apiKeyData.name,
-        selectedModel: selectedModel
-      }
-    })}\n\n`);
-
-    // Send completion message
-    res.write(`data: ${JSON.stringify({ 
-      type: 'complete', 
-      message: 'Processing completed successfully',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-    
-    res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-    res.end();
-
-  } catch (error) {
-    console.error('Error in complete replacement mode:', error);
-    
-    // Send error via stream
-    res.write(`data: ${JSON.stringify({
-      type: 'error',
-      error: error.message,
-      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    })}\n\n`);
-    
-    res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-    res.end();
-  }
-});
-
-//user prompt based 
 function createCustomGenerationPrompt(projectType, files, projectLanguage, userPrompt, allFilesMetadata, packageJson) {
   const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
   
-  const customPrompt = `You are an expert software development assistant. Generate completely NEW files based on user requirements.
+  return `You are an expert software development assistant. Generate completely NEW files based on user requirements.
 
 **PROJECT SETTINGS:**
 - Type: ${projectType}
@@ -1184,20 +930,9 @@ ${JSON.stringify(files, null, 2)}
 ${userPrompt}
 
 **CRITICAL FILE HANDLING INSTRUCTIONS:**
-1. **Modified Files**: If user asks to modify/rewrite a file, include it with isRewritten: true and complete code.do a complete rewrite if user ask to modify a file
+1. **Modified Files**: If user asks to modify/rewrite a file, include it with isRewritten: true and complete code
 2. **New Files**: If creating new files, include them with isNew: true and complete code  
 3. **Unchanged Files**: List all existing files you're NOT modifying in the "unchangedFiles" array
-4. **Only include complete code for files you're actually changing or creating**
-
-**GENERATION RULES:**
-1. **Security**: Use process.env variables for API keys/secrets (format: API_KEY_NAME="put-your-key-here")
-2. **Integration**: Follow existing project patterns and structure
-3. **Quality**: Complete, working, production-ready code only
-4. **Dependencies**: Suggest new packages if needed via npm install commands
-5. **Config Changes**: If config file changes are needed (webpack, tsconfig, etc.), create a README.md with instructions instead of modifying config files directly
-6. **File Modifications**: If user asks to modify existing files, completely rewrite those files and include them in response
-7. **Package Management**: Support both npm install and npm uninstall commands as needed
-8. **Secret Detection**: Extract any hardcoded secrets/API keys found in code and replace with environment variables
 
 **RESPONSE FORMAT:**
 {
@@ -1208,22 +943,16 @@ ${userPrompt}
   "totalWords": number,
   "changes_summary": "Description of generated/modified files and functionality",
   "secrets": {
-    "API_KEY_NAME": "put-your-key-here",
-    "DATABASE_URL": "put-your-db-url-here"
+    "API_KEY_NAME": "put-your-key-here"
   },
   "npmInstallCommands": [
-    "npm install package-name-1 package-name-2",
-    "npm install --save-dev dev-package-name",
-    "npm uninstall old-package-name"
+    "npm install package-name-1 package-name-2"
   ],
   "originalFilesToDelete": [
-    "path/to/file/being/rewritten.js",
-    "path/to/obsolete/file.js"
+    "path/to/file/being/rewritten.js"
   ],
   "unchangedFiles": [
-    "path/to/file/not/modified.js",
-    "path/to/another/unchanged/file.tsx",
-    "components/ExistingComponent.jsx"
+    "path/to/file/not/modified.js"
   ],
   "files": [
     {
@@ -1232,20 +961,6 @@ ${userPrompt}
       "isNew": true,
       "isRewritten": false,
       "changes": "Description of what this file does"
-    },
-    {
-      "path": "existing/file/to/modify${fileExtension}",
-      "content": "COMPLETE_REWRITTEN_CODE",
-      "isNew": false,
-      "isRewritten": true,
-      "changes": "Complete rewrite of existing file with modifications"
-    },
-    {
-      "path": "CONFIG_CHANGES.md",
-      "content": "config files code",
-      "isNew": true,
-      "isRewritten": false,
-      "changes": "Instructions for manual config file changes"
     }
   ]
 }
@@ -1254,412 +969,13 @@ ${userPrompt}
 ✅ Complete working code only
 ✅ No placeholders or TODOs
 ✅ Use environment variables for secrets
-✅ Follow existing project patterns
-✅ Rewrite existing files completely when modifications requested
-✅ Support both install and uninstall package commands
-✅ Extract hardcoded secrets into environment variables
-✅ List all unchanged files in unchangedFiles array
-✅ Only include files in "files" array if creating new or completely rewriting them`;
-
-  return customPrompt;
-}
-async function callAIForCustomGeneration(prompt, model, plan, res) {
-  // Use OpenAI's official API for GPT-5 Mini
-  try {
-    console.log('Attempting API call with OpenAI GPT-5 Mini for custom generation');
-    
-    const completion = await openai.chat.completions.create({
-      model: "gpt-5-mini",
-      messages: [
-        {
-          role: 'system',
-          content: 'You are an expert software development assistant. Generate complete, working code files based on user requirements. Always return valid JSON responses as requested.'
-        },
-        {
-          role: 'user',
-          content: prompt
-        }
-      ],
-      stream: true,
-    });
-
-    let fullResponse = '';
-
-    // Stream the response
-    for await (const chunk of completion) {
-      const content = chunk.choices[0]?.delta?.content || '';
-      
-      if (content) {
-        fullResponse += content;
-        
-        // Send streaming chunk to frontend
-        res.write(`data: ${JSON.stringify({ 
-          type: 'chunk', 
-          content: content,
-          timestamp: new Date().toISOString()
-        })}\n\n`);
-      }
-    }
-
-    console.log('✅ OpenAI GPT-5 Mini API call successful for custom generation');
-    return fullResponse;
-
-  } catch (error) {
-    console.log('❌ OpenAI GPT-5 Mini API call failed:', error.message);
-    throw error;
-  }
+✅ Follow existing project patterns`;
 }
 
-app.post('/api/generate-custom', async (req, res) => {
-  try {
-    const { 
-      api_key, 
-      projectType, 
-      files, 
-      projectLanguage, 
-      userPrompt, 
-      selectedModel,
-      allFilesMetadata,
-      packageJson
-    } = req.body;    
-    
-    // Set up Server-Sent Events headers
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Cache-Control'
-    });
-
-    // Send initial connection message
-    res.write(`data: ${JSON.stringify({ 
-      type: 'connected', 
-      message: 'Stream connected successfully',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-
-    // API key validation
-    if (!api_key || typeof api_key !== 'string' || api_key.trim() === '') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'API key is required and must be a valid string'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Validate userPrompt
-    if (!userPrompt || typeof userPrompt !== 'string' || userPrompt.trim() === '') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'User prompt is required and must be a valid string'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Validate selectedModel (only GPT-5 Mini allowed)
-    if (!selectedModel || selectedModel !== 'gpt5-mini') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'Custom file generation only supports GPT-5 Mini model. Please select GPT-5 Mini.'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    const apiKey = api_key.trim();
-
-    // Send processing status
-    res.write(`data: ${JSON.stringify({ 
-      type: 'status', 
-      message: 'Validating API key...',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-
-    // Find the API key and associated user
-    const apiKeyData = await findApiKeyRecord(apiKey);
-    
-    if (!apiKeyData) {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'Invalid API key'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // ONLY ALLOW PRO USERS
-    if (apiKeyData.users.plan === 'free') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'Custom file generation is only available for Pro plan users. Please upgrade to access this feature.',
-        data: {
-          currentPlan: 'free',
-          requiredPlan: 'pro',
-          feature: 'Custom File Generation'
-        }
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Send processing status
-    res.write(`data: ${JSON.stringify({ 
-      type: 'status', 
-      message: 'Checking usage limits...',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-
-    if (selectedModel !== 'gpt5-mini') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'This feature only supports GPT-5 Mini model. Please select GPT-5 Mini.'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Use the PostgreSQL function for count management
-    const { data: countResult, error: countError } = await supabase
-      .rpc('increment_api_count', {
-        api_name: apiKeyData.name
-      });
-
-    if (countError) {
-      throw countError;
-    }
-
-    // Check if the function indicates limit reached
-    if (!countResult.success) {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: countResult.error,
-        data: {
-          count: countResult.count,
-          limit: countResult.limit,
-          remaining: countResult.limit - countResult.count,
-          plan: apiKeyData.users.plan
-        }
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Validation for packageJson
-    if (!packageJson || typeof packageJson !== 'object') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'Invalid input: packageJson is required and must be an object'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Validation for required fields
-    if (!projectType || typeof projectType !== 'string') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'Project type is required and must be a valid string'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    if (!projectLanguage || typeof projectLanguage !== 'string') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'Project language is required and must be a valid string'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Send processing status
-    res.write(`data: ${JSON.stringify({ 
-      type: 'status', 
-      message: 'Creating custom generation prompt...',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-    
-    // Create prompt for custom file generation
-    const prompt = createCustomGenerationPrompt(
-      projectType, 
-      files || [], 
-      projectLanguage, 
-      userPrompt.trim(),
-      allFilesMetadata || {},
-      packageJson
-    );
-
-    // Send processing status
-    res.write(`data: ${JSON.stringify({ 
-      type: 'status', 
-      message: 'Starting AI processing with streaming...',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-    
-    // Get AI response using the selected model (with streaming)
-    const aiResponse = await callAIForCustomGeneration(prompt, selectedModel, apiKeyData.users.plan, res);
-
-    // Send processing status
-    res.write(`data: ${JSON.stringify({ 
-      type: 'status', 
-      message: 'AI processing completed. Parsing response...',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-
-    // Parse JSON response (same parsing logic as original)
-    let parsedResponse;
-    try {
-      // Try multiple parsing strategies
-      let jsonContent = '';
-      
-      // Strategy 1: Look for JSON block between ```json and ```
-      const codeBlockMatch = aiResponse.match(/```json\s*([\s\S]*?)\s*```/);
-      if (codeBlockMatch) {
-        jsonContent = codeBlockMatch[1].trim();
-      }
-      
-      // Strategy 2: Look for JSON object starting with { and ending with }
-      if (!jsonContent) {
-        const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          jsonContent = jsonMatch[0];
-        }
-      }
-      
-      // Strategy 3: Try to clean the response and extract JSON
-      if (!jsonContent) {
-        let cleaned = aiResponse
-          .replace(/^[\s\S]*?(?=\{)/, '') // Remove everything before first {
-          .replace(/\}[\s\S]*$/, '}') // Remove everything after last }
-          .trim();
-        
-        if (cleaned.startsWith('{') && cleaned.endsWith('}')) {
-          jsonContent = cleaned;
-        }
-      }
-      
-      // If we found JSON content, try to parse it
-      if (jsonContent) {
-        parsedResponse = JSON.parse(jsonContent);
-      } else {
-        console.error('No JSON content found in AI response');
-        throw new Error('No valid JSON found in AI response');
-      }
-      
-    } catch (parseError) {
-      console.error('JSON parsing failed:', parseError.message);
-      
-      // Try fallback parsing
-      try {
-        let fixedJson = aiResponse
-          .replace(/^[\s\S]*?(\{)/, '$1')
-          .replace(/(\})[\s\S]*$/, '$1')
-          .replace(/,\s*}/g, '}')
-          .replace(/,\s*]/g, ']')
-          .trim();
-        
-        parsedResponse = JSON.parse(fixedJson);
-      } catch (fallbackError) {
-        res.write(`data: ${JSON.stringify({
-          type: 'error',
-          error: 'Failed to parse AI response as JSON',
-          details: {
-            originalError: parseError.message,
-            fallbackError: fallbackError.message,
-            responsePreview: aiResponse.substring(0, 200) + '...'
-          }
-        })}\n\n`);
-        res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-        res.end();
-        return;
-      }
-    }
-
-    // Validate response structure
-    if (!parsedResponse || typeof parsedResponse !== 'object') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'Invalid response structure from AI'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Ensure files array exists
-    if (!parsedResponse.files || !Array.isArray(parsedResponse.files)) {
-      parsedResponse.files = [];
-    }
-
-    // Send final parsed response
-    res.write(`data: ${JSON.stringify({
-      type: 'final',
-      success: true,
-      data: {
-        ...parsedResponse,
-        generationMode: 'custom',
-        usage: {
-          count: countResult.count,
-          limit: countResult.limit,
-          remaining: countResult.remaining,
-          plan: apiKeyData.users.plan
-        }
-      },
-      metadata: {
-        originalProjectType: projectType,
-        projectLanguage: projectLanguage,
-        userPrompt: userPrompt,
-        processingTime: new Date().toISOString(),
-        generationMode: 'custom',
-        apiKeyUser: apiKeyData.name,
-        selectedModel: selectedModel
-      }
-    })}\n\n`);
-
-    // Send completion message
-    res.write(`data: ${JSON.stringify({ 
-      type: 'complete', 
-      message: 'Custom generation completed successfully',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-    
-    res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-    res.end();
-
-  } catch (error) {
-    console.error('Error in custom file generation:', error);
-    
-    // Send error via stream
-    res.write(`data: ${JSON.stringify({
-      type: 'error',
-      error: error.message,
-      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    })}\n\n`);
-    
-    res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-    res.end();
-  }
-});
-
-//optimize
 function createOptimizationPrompt(projectType, projectLanguage, files) {
   const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
-     
-  const optimizationPrompt = `You are an expert code optimization specialist. Optimize the provided files for better performance, maintainability, and modern best practices.
+  
+  return `You are an expert code optimization specialist. Optimize the provided files for better performance, maintainability, and modern best practices.
 
 **PROJECT SETTINGS:**
 - Type: ${projectType}
@@ -1675,9 +991,6 @@ ${JSON.stringify(files, null, 2)}
 3. **Modern Practices**: Latest syntax, async patterns, security
 4. **Maintainability**: Clean code, proper documentation, type safety
 5. **Clean Imports**: Remove unused imports and dead code
-6. **Secrets Handling**: Keep any hardcoded secrets as-is in the code
-7. **Complete Rewrite**: Return only complete file code, rewrite entire code from scratch
-
 
 **RETURN JSON:**
 {
@@ -1702,343 +1015,239 @@ ${JSON.stringify(files, null, 2)}
 ✅ Preserve all functionality  
 ✅ Valid ${projectLanguage} syntax
 ✅ No placeholders or TODOs
-✅ Remove unused imports
-✅ Keep hardcoded secrets unchanged
-✅ Focus on measurable improvements`;
-
-  return optimizationPrompt;
+✅ Remove unused imports`;
 }
 
-async function callAIForOptimization(prompt, model, plan, res) {
+// ====================
+// MAIN ROUTE HANDLERS
+// ====================
+// UPDATED /api/process-code route
 
-
-  // Use OpenAI's official API for GPT-5 Mini
+app.post('/api/process-code', async (req, res) => {
   try {
-    console.log('Attempting API call with OpenAI GPT-5 Mini for file optimization');
+    const { projectType, files, projectLanguage, packageJson, allFilesMetadata } = req.body;
     
-    const completion = await openai.chat.completions.create({
-      model: "gpt-5-mini",
-      messages: [
-        {
-          role: 'system',
-          content: 'You are an expert code optimization specialist. Analyze code and provide comprehensive optimizations while maintaining functionality. Always return valid JSON responses as requested.'
-        },
-        {
-          role: 'user',
-          content: prompt
-        }
-      ],
-      stream: true,
-    });
-
-    let fullResponse = '';
-
-    // Stream the response
-    for await (const chunk of completion) {
-      const content = chunk.choices[0]?.delta?.content || '';
-      
-      if (content) {
-        fullResponse += content;
-        
-        // Send streaming chunk to frontend
-        res.write(`data: ${JSON.stringify({ 
-          type: 'chunk', 
-          content: content,
-          timestamp: new Date().toISOString()
-        })}\n\n`);
-      }
-    }
-
-    console.log('✅ OpenAI GPT-5 Mini API call successful for optimization');
-    return fullResponse;
-
-  } catch (error) {
-    console.log('❌ OpenAI GPT-5 Mini API call failed:', error.message);
-    throw error;
-  }
-}
-
-app.post('/api/optimize-files', async (req, res) => {
-  try {
-    const { 
-      api_key, 
-      projectType, 
-      files, 
-      projectLanguage, 
-      selectedModel
-    } = req.body;    
+    const validationResult = await validateAndProcessRequest(req, res, [
+      'projectType', 'files', 'projectLanguage', 'packageJson'
+    ]);
     
-    // Set up Server-Sent Events headers
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Cache-Control'
-    });
-
-    // Send initial connection message
-    res.write(`data: ${JSON.stringify({ 
-      type: 'connected', 
-      message: 'Stream connected successfully',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-
-    // API key validation
-    if (!api_key || typeof api_key !== 'string' || api_key.trim() === '') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'API key is required and must be a valid string'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Validate selectedModel (only GPT-5 Mini allowed)
-    if (!selectedModel || selectedModel !== 'gpt5-mini') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'File optimization only supports GPT-5 Mini model. Please select GPT-5 Mini.'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    const apiKey = api_key.trim();
-
-    // Send processing status
-    res.write(`data: ${JSON.stringify({ 
-      type: 'status', 
-      message: 'Validating API key...',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-
-    // Find the API key and associated user
-    const apiKeyData = await findApiKeyRecord(apiKey);
+    if (!validationResult) return;
     
-    if (!apiKeyData) {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'Invalid API key'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // ONLY ALLOW PRO USERS
-    if (apiKeyData.users.plan === 'free') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'File optimization is only available for Pro plan users. Please upgrade to access this feature.',
-        data: {
-          currentPlan: 'free',
-          requiredPlan: 'pro',
-          feature: 'File Optimization'
-        }
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Send processing status
-    res.write(`data: ${JSON.stringify({ 
-      type: 'status', 
-      message: 'Checking usage limits...',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-
-    if (selectedModel !== 'gpt5-mini') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'This feature only supports GPT-5 Mini model. Please select GPT-5 Mini.'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Use the PostgreSQL function for count management
-    const { data: countResult, error: countError } = await supabase
-      .rpc('increment_api_count', {
-        api_name: apiKeyData.name
-      });
-
-    if (countError) {
-      throw countError;
-    }
-
-    // Check if the function indicates limit reached
-    if (!countResult.success) {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: countResult.error,
-        data: {
-          count: countResult.count,
-          limit: countResult.limit,
-          remaining: countResult.limit - countResult.count,
-          plan: apiKeyData.users.plan
-        }
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Validation for required fields
-    if (!projectType || typeof projectType !== 'string') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'Project type is required and must be a valid string'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
-
-    if (!projectLanguage || typeof projectLanguage !== 'string') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'Project language is required and must be a valid string'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
-      return;
-    }
+    const { apiKeyData, countResult, selectedModel, userApiKey } = validationResult;
 
     // Validation for files
     if (!files || !Array.isArray(files) || files.length === 0) {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'Files array is required and cannot be empty'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
+      sendSSEMessage(res, 'error', { error: 'Invalid input: files array is required and cannot be empty' });
+      endSSE(res);
       return;
     }
 
-    // Send processing status
-    res.write(`data: ${JSON.stringify({ 
-      type: 'status', 
-      message: 'Creating optimization analysis...',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
+    // Validation for packageJson
+    if (!packageJson || typeof packageJson !== 'object') {
+      sendSSEMessage(res, 'error', { error: 'Invalid input: packageJson is required and must be an object' });
+      endSSE(res);
+      return;
+    }
+
+    sendSSEMessage(res, 'status', { message: 'Creating refactoring prompt...' });
     
-    // Create prompt for file optimization
-    const prompt = createOptimizationPrompt(
-      projectType, 
-      projectLanguage, 
-      files
+    const prompt = createRefactoringPrompt(projectType, files, projectLanguage, packageJson, allFilesMetadata);
+
+    sendSSEMessage(res, 'status', { message: 'Starting AI processing with streaming...' });
+    
+    // UPDATED: Pass user plan and API key to callAIModel
+    const aiResponse = await callAIModel(
+      prompt, 
+      selectedModel, 
+      res, 
+      apiKeyData.users.plan, 
+      userApiKey
     );
 
-    // Send processing status
-    res.write(`data: ${JSON.stringify({ 
-      type: 'status', 
-      message: 'Starting AI optimization analysis with streaming...',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-    
-    // Get AI response using GPT-5 Mini (with streaming)
-    const aiResponse = await callAIForOptimization(prompt, selectedModel, apiKeyData.users.plan, res);
+    sendSSEMessage(res, 'status', { message: 'AI processing completed. Parsing response...' });
 
-    // Send processing status
-    res.write(`data: ${JSON.stringify({ 
-      type: 'status', 
-      message: 'AI optimization completed. Parsing response...',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
+    const parsedResponse = parseAIResponse(aiResponse);
 
-    // Parse JSON response (same parsing logic as previous routes)
-    let parsedResponse;
-    try {
-      // Try multiple parsing strategies
-      let jsonContent = '';
-      
-      // Strategy 1: Look for JSON block between ```json and ```
-      const codeBlockMatch = aiResponse.match(/```json\s*([\s\S]*?)\s*```/);
-      if (codeBlockMatch) {
-        jsonContent = codeBlockMatch[1].trim();
-      }
-      
-      // Strategy 2: Look for JSON object starting with { and ending with }
-      if (!jsonContent) {
-        const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          jsonContent = jsonMatch[0];
-        }
-      }
-      
-      // Strategy 3: Try to clean the response and extract JSON
-      if (!jsonContent) {
-        let cleaned = aiResponse
-          .replace(/^[\s\S]*?(?=\{)/, '') // Remove everything before first {
-          .replace(/\}[\s\S]*$/, '}') // Remove everything after last }
-          .trim();
-        
-        if (cleaned.startsWith('{') && cleaned.endsWith('}')) {
-          jsonContent = cleaned;
-        }
-      }
-      
-      // If we found JSON content, try to parse it
-      if (jsonContent) {
-        parsedResponse = JSON.parse(jsonContent);
-      } else {
-        console.error('No JSON content found in AI response');
-        throw new Error('No valid JSON found in AI response');
-      }
-      
-    } catch (parseError) {
-      console.error('JSON parsing failed:', parseError.message);
-      
-      // Try fallback parsing
-      try {
-        let fixedJson = aiResponse
-          .replace(/^[\s\S]*?(\{)/, '$1')
-          .replace(/(\})[\s\S]*$/, '$1')
-          .replace(/,\s*}/g, '}')
-          .replace(/,\s*]/g, ']')
-          .trim();
-        
-        parsedResponse = JSON.parse(fixedJson);
-      } catch (fallbackError) {
-        res.write(`data: ${JSON.stringify({
-          type: 'error',
-          error: 'Failed to parse AI response as JSON',
-          details: {
-            originalError: parseError.message,
-            fallbackError: fallbackError.message,
-            responsePreview: aiResponse.substring(0, 200) + '...'
-          }
-        })}\n\n`);
-        res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-        res.end();
-        return;
-      }
+    // Validate required fields
+    if (!parsedResponse.files || !Array.isArray(parsedResponse.files)) {
+      parsedResponse.files = [];
     }
 
-    // Validate response structure
-    if (!parsedResponse || typeof parsedResponse !== 'object') {
-      res.write(`data: ${JSON.stringify({
-        type: 'error',
-        error: 'Invalid response structure from AI'
-      })}\n\n`);
-      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-      res.end();
+    sendSSEMessage(res, 'final', {
+      success: true,
+      data: {
+        ...parsedResponse,
+        replacementMode: true,
+        originalFilesProcessed: files.length,
+        usage: {
+          count: countResult.count,
+          limit: countResult.limit,
+          remaining: countResult.remaining,
+          plan: apiKeyData.users.plan
+        }
+      },
+      metadata: {
+        originalProjectType: projectType,
+        projectLanguage: projectLanguage,
+        processingTime: new Date().toISOString(),
+        replacementMode: true,
+        apiKeyUser: apiKeyData.name,
+        selectedModel: selectedModel
+      }
+    });
+
+    sendSSEMessage(res, 'complete', { message: 'Processing completed successfully' });
+    endSSE(res);
+
+  } catch (error) {
+    console.error('Error in complete replacement mode:', error);
+    sendSSEMessage(res, 'error', {
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+    endSSE(res);
+  }
+});
+
+// UPDATED /api/generate-custom route
+app.post('/api/generate-custom', async (req, res) => {
+  try {
+    const { projectType, files, projectLanguage, userPrompt, allFilesMetadata, packageJson } = req.body;
+    
+    const validationResult = await validateAndProcessRequest(req, res, [
+      'projectType', 'projectLanguage', 'userPrompt', 'packageJson'
+    ]);
+    
+    if (!validationResult) return;
+    
+    const { apiKeyData, countResult, selectedModel, userApiKey } = validationResult;
+
+    // Validate userPrompt
+    if (!userPrompt || typeof userPrompt !== 'string' || userPrompt.trim() === '') {
+      sendSSEMessage(res, 'error', { error: 'User prompt is required and must be a valid string' });
+      endSSE(res);
       return;
     }
+
+    // Validation for packageJson
+    if (!packageJson || typeof packageJson !== 'object') {
+      sendSSEMessage(res, 'error', { error: 'Invalid input: packageJson is required and must be an object' });
+      endSSE(res);
+      return;
+    }
+
+    sendSSEMessage(res, 'status', { message: 'Creating custom generation prompt...' });
+    
+    const prompt = createCustomGenerationPrompt(
+      projectType, 
+      files || [], 
+      projectLanguage, 
+      userPrompt.trim(),
+      allFilesMetadata || {},
+      packageJson
+    );
+
+    sendSSEMessage(res, 'status', { message: 'Starting AI processing with streaming...' });
+    
+    // UPDATED: Pass user plan and API key to callAIModel
+    const aiResponse = await callAIModel(
+      prompt, 
+      selectedModel, 
+      res, 
+      apiKeyData.users.plan, 
+      userApiKey
+    );
+
+    sendSSEMessage(res, 'status', { message: 'AI processing completed. Parsing response...' });
+
+    const parsedResponse = parseAIResponse(aiResponse);
 
     // Ensure files array exists
     if (!parsedResponse.files || !Array.isArray(parsedResponse.files)) {
       parsedResponse.files = [];
     }
 
-    // Send final parsed response
-    res.write(`data: ${JSON.stringify({
-      type: 'final',
+    sendSSEMessage(res, 'final', {
+      success: true,
+      data: {
+        ...parsedResponse,
+        generationMode: 'custom',
+        usage: {
+          count: countResult.count,
+          limit: countResult.limit,
+          remaining: countResult.remaining,
+          plan: apiKeyData.users.plan
+        }
+      },
+      metadata: {
+        originalProjectType: projectType,
+        projectLanguage: projectLanguage,
+        userPrompt: userPrompt,
+        processingTime: new Date().toISOString(),
+        generationMode: 'custom',
+        apiKeyUser: apiKeyData.name,
+        selectedModel: selectedModel
+      }
+    });
+
+    sendSSEMessage(res, 'complete', { message: 'Custom generation completed successfully' });
+    endSSE(res);
+
+  } catch (error) {
+    console.error('Error in custom file generation:', error);
+    sendSSEMessage(res, 'error', {
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+    endSSE(res);
+  }
+});
+
+// UPDATED /api/optimize-files route
+app.post('/api/optimize-files', async (req, res) => {
+  try {
+    const { projectType, files, projectLanguage } = req.body;
+    
+    const validationResult = await validateAndProcessRequest(req, res, [
+      'projectType', 'projectLanguage', 'files'
+    ]);
+    
+    if (!validationResult) return;
+    
+    const { apiKeyData, countResult, selectedModel, userApiKey } = validationResult;
+
+    // Validation for files
+    if (!files || !Array.isArray(files) || files.length === 0) {
+      sendSSEMessage(res, 'error', { error: 'Files array is required and cannot be empty' });
+      endSSE(res);
+      return;
+    }
+
+    sendSSEMessage(res, 'status', { message: 'Creating optimization analysis...' });
+    
+    const prompt = createOptimizationPrompt(projectType, projectLanguage, files);
+
+    sendSSEMessage(res, 'status', { message: 'Starting AI optimization analysis with streaming...' });
+    
+    // UPDATED: Pass user plan and API key to callAIModel
+    const aiResponse = await callAIModel(
+      prompt, 
+      selectedModel, 
+      res, 
+      apiKeyData.users.plan, 
+      userApiKey
+    );
+
+    sendSSEMessage(res, 'status', { message: 'AI optimization completed. Parsing response...' });
+
+    const parsedResponse = parseAIResponse(aiResponse);
+
+    // Ensure files array exists
+    if (!parsedResponse.files || !Array.isArray(parsedResponse.files)) {
+      parsedResponse.files = [];
+    }
+
+    sendSSEMessage(res, 'final', {
       success: true,
       data: {
         ...parsedResponse,
@@ -2060,33 +1269,20 @@ app.post('/api/optimize-files', async (req, res) => {
         apiKeyUser: apiKeyData.name,
         selectedModel: selectedModel
       }
-    })}\n\n`);
+    });
 
-    // Send completion message
-    res.write(`data: ${JSON.stringify({ 
-      type: 'complete', 
-      message: 'File optimization completed successfully',
-      timestamp: new Date().toISOString()
-    })}\n\n`);
-    
-    res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-    res.end();
+    sendSSEMessage(res, 'complete', { message: 'File optimization completed successfully' });
+    endSSE(res);
 
   } catch (error) {
     console.error('Error in file optimization:', error);
-    
-    // Send error via stream
-    res.write(`data: ${JSON.stringify({
-      type: 'error',
+    sendSSEMessage(res, 'error', {
       error: error.message,
       details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    })}\n\n`);
-    
-    res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
-    res.end();
+    });
+    endSSE(res);
   }
 });
-
 
 app.post('/api/subscription/cancel', async (req, res) => {
   try {
@@ -2369,7 +1565,7 @@ app.post('/api/payment/create-subscription', async (req, res) => {
 
 app.post('/api/generate-api-key', async (req, res) => {
   try {
-    const { name } = req.body;
+    const { name, api_key: userProvidedApiKey } = req.body;
 
     // Validation
     if (!name || typeof name !== 'string' || name.trim() === '') {
@@ -2406,6 +1602,8 @@ app.post('/api/generate-api-key', async (req, res) => {
       }
     }
 
+    const userPlan = existingUser?.plan || 'free';
+
     // Check if API key already exists for this user
     const { data: existingApiKey, error: apiKeyCheckError } = await supabase
       .from('api_keys')
@@ -2425,40 +1623,57 @@ app.post('/api/generate-api-key', async (req, res) => {
       });
     }
 
-    // Generate new API key
-    const newApiKey = 'sk-' + crypto.randomBytes(32).toString('hex');
+    let newApiKey;
+    let hashedApiKey;
 
-    // Hash the API key before storing
-    const hashedApiKey = await hashApiKey(newApiKey);
+    // Handle based on user plan
+    if (userPlan === 'free') {
+      // FREE USERS: Must provide their own API key
+      if (!userProvidedApiKey || typeof userProvidedApiKey !== 'string' || userProvidedApiKey.trim() === '') {
+        return res.status(400).json({
+          success: false,
+          error: 'Free users must provide their own API key'
+        });
+      }
 
-    // ✅ FOR FREE USERS: PRESERVE COUNT (NO RESET LOGIC)
-    // ✅ FOR PRO USERS: PRESERVE EXISTING RESET LOGIC
+      // Validate API key format (optional - you can add more specific validation)
+      const trimmedApiKey = userProvidedApiKey.trim();
+      if (trimmedApiKey.length < 10) { // Basic length check
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid API key format'
+        });
+      }
+
+      newApiKey = trimmedApiKey;
+      hashedApiKey = await hashApiKey(newApiKey);
+    } else if (userPlan === 'pro') {
+      // PRO USERS: Generate API key automatically
+      newApiKey = 'sk-' + crypto.randomBytes(32).toString('hex');
+      hashedApiKey = await hashApiKey(newApiKey);
+    } else {
+      return res.status(403).json({
+        success: false,
+        error: 'Invalid user plan. Only free and paid users are supported.'
+      });
+    }
+
+    // Preserve count and reset date logic
     let preservedCount = 0;
     let preservedResetDate = new Date().toISOString().split('T')[0];
     
     if (existingApiKey) {
-      const userPlan = existingUser?.plan || 'free';
+      // BOTH FREE AND PRO USERS: Daily reset logic
+      const today = new Date().toISOString().split('T')[0];
       
-      if (userPlan === 'free') {
-        // FREE USERS: Always preserve count (no daily reset)
+      if (existingApiKey.last_reset_date === today) {
+        // Same day - preserve the count to maintain daily limit
         preservedCount = existingApiKey.count;
         preservedResetDate = existingApiKey.last_reset_date;
-        // console.log(`✅ FREE USER: Preserving lifetime count ${preservedCount} for user ${userName}`);
       } else {
-        // PRO USERS: Keep existing daily reset logic
-        const today = new Date().toISOString().split('T')[0];
-        
-        if (existingApiKey.last_reset_date === today) {
-          // Same day - preserve the count to maintain daily limit
-          preservedCount = existingApiKey.count;
-          preservedResetDate = existingApiKey.last_reset_date;
-          // console.log(`✅ PRO USER: Preserving count ${preservedCount} for user ${userName} (same day)`);
-        } else {
-          // Different day - reset count to 0 (normal daily reset)
-          preservedCount = 0;
-          preservedResetDate = today;
-          // console.log(`✅ PRO USER: Resetting count for user ${userName} (new day)`);
-        }
+        // Different day - reset count to 0 (normal daily reset)
+        preservedCount = 0;
+        preservedResetDate = today;
       }
     }
 
@@ -2493,29 +1708,38 @@ app.post('/api/generate-api-key', async (req, res) => {
       }
     }
 
-    // console.log(`✅ Generated API key for user: ${userName} (count preserved: ${preservedCount})`);
+    // Different response messages based on plan
+    const responseMessage = userPlan === 'free' 
+      ? 'API key stored successfully' 
+      : 'API key generated successfully';
+
+    const responseData = {
+      name: userName,
+      plan: userPlan,
+      count: preservedCount,
+      preserved_usage: preservedCount > 0
+    };
+
+    // Only return the plain API key to pro users (since they generated it)
+    // Free users already have their key, so we don't need to return it
+    if (userPlan === 'pro') {
+      responseData.api_key = newApiKey;
+    }
 
     res.json({
       success: true,
-      message: 'API key generated successfully',
-      data: {
-        name: userName,
-        api_key: newApiKey, // Return the plain API key to user
-        plan: existingUser?.plan || 'free',
-        count: preservedCount,
-        preserved_usage: preservedCount > 0
-      }
+      message: responseMessage,
+      data: responseData
     });
 
   } catch (error) {
-    console.error('❌ Error generating API key:', error);
+    console.error('❌ Error processing API key:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Internal server error'
     });
   }
 });
-
 // Route 2: Delete API Key
 app.post('/api/delete-api-key', async (req, res) => {
   try {
