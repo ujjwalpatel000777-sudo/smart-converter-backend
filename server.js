@@ -523,7 +523,7 @@ async function validateAndProcessRequest(req, res, requiredFields = []) {
   const apiKey = api_key.trim();
   sendSSEMessage(res, 'status', { message: 'Validating API key...' });
 
-  // Find the API key and associated user
+  // UNIFIED APPROACH: Use findApiKeyRecord for both free and pro users
   const apiKeyData = await findApiKeyRecord(apiKey);
   
   if (!apiKeyData) {
@@ -565,7 +565,7 @@ async function validateAndProcessRequest(req, res, requiredFields = []) {
 
   sendSSEMessage(res, 'status', { message: 'Checking usage limits...' });
 
-  // Use the PostgreSQL function for count management
+  // Use the PostgreSQL function for count management (works for both free and pro)
   const { data: countResult, error: countError } = await supabase
     .rpc('increment_api_count', {
       api_name: apiKeyData.name
@@ -603,12 +603,12 @@ async function callAIModel(prompt, model, res, userPlan = 'pro', userApiKey = nu
     const actualModel = "deepseek/deepseek-r1:free";
     
     if (userPlan === 'free') {
-      // Free users: use their provided API key
+      // Free users: use their provided OpenRouter API key
       if (!userApiKey) {
-        throw new Error('User API key is required for free users');
+        throw new Error('OpenRouter API key is required for free users to use DeepSeek R1');
       }
       
-      console.log('Using user-provided API key for free user');
+      console.log('Using user-provided OpenRouter API key for free user (DeepSeek R1)');
       const userClient = new OpenAI({
         baseURL: "https://openrouter.ai/api/v1",
         apiKey: userApiKey,
@@ -640,28 +640,28 @@ async function callAIModel(prompt, model, res, userPlan = 'pro', userApiKey = nu
           }
         }
 
-        console.log('API call successful with user-provided key');
+        console.log('DeepSeek R1 API call successful with user-provided OpenRouter key');
         return fullResponse;
 
       } catch (error) {
-        console.log('API call failed with user-provided key:', error.message);
-        throw new Error(`DeepSeek API call failed with your API key: ${error.message}`);
+        console.log('DeepSeek R1 API call failed with user-provided key:', error.message);
+        throw new Error(`DeepSeek R1 API call failed with your OpenRouter API key: ${error.message}`);
       }
     } else {
-      // Pro users shouldn't use DeepSeek - they have GPT-5 Mini
-      throw new Error('Pro users should use GPT-5 Mini model');
+      // Pro users should use GPT-5 Mini instead
+      throw new Error('Pro users should use GPT-5 Mini model instead of DeepSeek R1');
     }
     
   } else if (model === 'qwen3-coder') {
     const actualModel = "qwen/qwen3-coder:free";
     
     if (userPlan === 'free') {
-      // Free users: use their provided API key
+      // Free users: use their provided OpenRouter API key
       if (!userApiKey) {
-        throw new Error('User API key is required for free users');
+        throw new Error('OpenRouter API key is required for free users to use Qwen3 Coder');
       }
       
-      console.log('Using user-provided API key for Qwen3 Coder (free user)');
+      console.log('Using user-provided OpenRouter API key for free user (Qwen3 Coder)');
       const userClient = new OpenAI({
         baseURL: "https://openrouter.ai/api/v1",
         apiKey: userApiKey,
@@ -693,16 +693,16 @@ async function callAIModel(prompt, model, res, userPlan = 'pro', userApiKey = nu
           }
         }
 
-        console.log('Qwen3 Coder API call successful with user-provided key');
+        console.log('Qwen3 Coder API call successful with user-provided OpenRouter key');
         return fullResponse;
 
       } catch (error) {
         console.log('Qwen3 Coder API call failed with user-provided key:', error.message);
-        throw new Error(`Qwen3 Coder API call failed with your API key: ${error.message}`);
+        throw new Error(`Qwen3 Coder API call failed with your OpenRouter API key: ${error.message}`);
       }
     } else {
-      // Pro users shouldn't use Qwen3 Coder - they have GPT-5 Mini
-      throw new Error('Pro users should use GPT-5 Mini model');
+      // Pro users should use GPT-5 Mini instead
+      throw new Error('Pro users should use GPT-5 Mini model instead of Qwen3 Coder');
     }
     
   } else if (model === 'gpt5-mini') {
@@ -712,7 +712,7 @@ async function callAIModel(prompt, model, res, userPlan = 'pro', userApiKey = nu
     }
     
     try {
-      console.log('Attempting API call with OpenAI GPT-5 Mini');
+      console.log('Using OpenAI GPT-5 Mini for pro user');
       
       const completion = await openai.chat.completions.create({
         model: "gpt-5-mini",
@@ -1807,6 +1807,7 @@ app.post('/api/delete-api-key', async (req, res) => {
 });
 
 // Route 3: Update Count (Increment by 1)
+// Route 3: Update Count (Increment by 1) - UPDATED
 app.post('/api/update-count', async (req, res) => {
   try {
     const { api_key } = req.body;
@@ -1821,7 +1822,7 @@ app.post('/api/update-count', async (req, res) => {
 
     const apiKey = api_key.trim();
 
-    // Find the API key and associated user (using hash comparison)
+    // UNIFIED APPROACH: Find the API key using hash comparison (works for both free and pro)
     const apiKeyData = await findApiKeyRecord(apiKey);
     
     if (!apiKeyData) {
@@ -1831,7 +1832,7 @@ app.post('/api/update-count', async (req, res) => {
       });
     }
 
-    // USE THE POSTGRESQL FUNCTION
+    // Use the PostgreSQL function for count management
     const { data: countResult, error: countError } = await supabase
       .rpc('increment_api_count', {
         api_name: apiKeyData.name
@@ -1854,7 +1855,7 @@ app.post('/api/update-count', async (req, res) => {
       });
     }
 
-    // console.log(`Incremented count for user: ${apiKeyData.name} (${countResult.count}/${countResult.limit})`);
+    console.log(`Incremented count for user: ${apiKeyData.name} (${countResult.count}/${countResult.limit})`);
 
     res.json({
       success: true,
