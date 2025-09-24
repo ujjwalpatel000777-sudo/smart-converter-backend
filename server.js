@@ -1898,7 +1898,26 @@ app.post('/api/get-user-api-info', async (req, res) => {
 
     const userName = name.trim();
 
-    // Get user's API key info with plan details AND subscription info
+    // First, check if user exists in users table (CRITICAL: This ensures plan data is always available)
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('plan, subscription_status, subscription_id')
+      .eq('email', userName)  // Make sure this matches your users table email column
+      .single();
+
+    if (userError) {
+      if (userError.code === 'PGRST116') {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found in database. Please ensure user is properly registered.'
+        });
+      }
+      throw userError;
+    }
+
+    // At this point, we ALWAYS have userData with plan information
+
+    // Get user's API key info (may or may not exist)
     const { data: apiKeyData, error: findError } = await supabase
       .from('api_keys')
       .select(`
@@ -1906,39 +1925,16 @@ app.post('/api/get-user-api-info', async (req, res) => {
         api_key,
         count,
         last_reset_date,
-        created_at,
-        users!inner(
-          plan,
-          subscription_status,
-          subscription_id
-        )
+        created_at
       `)
       .eq('name', userName)
       .single();
-
-    if (findError) {
-      if (findError.code === 'PGRST116') {
-        return res.status(404).json({
-          success: false,
-          error: 'No API key found for this user'
-        });
-      }
-      throw findError;
-    }
-
-    // Check if API key is null (deleted)
-    if (!apiKeyData.api_key) {
-      return res.status(404).json({
-        success: false,
-        error: 'User exists but has no active API key'
-      });
-    }
 
     // Get plan limit
     const { data: planLimit, error: limitError } = await supabase
       .from('plan_limits')
       .select('limit_value')
-      .eq('plan', apiKeyData.users.plan)
+      .eq('plan', userData.plan)
       .single();
 
     if (limitError) {
@@ -1946,10 +1942,40 @@ app.post('/api/get-user-api-info', async (req, res) => {
     }
 
     const limit = planLimit.limit_value;
+
+    // If no API key exists or API key is null, return user info without API key data
+    if (findError && findError.code === 'PGRST116' || !apiKeyData || !apiKeyData.api_key) {
+      console.log(`📊 User ${userName} exists but has no API key`);
+      
+      return res.json({
+        success: true,
+        data: {
+          name: userName,
+          api_key: null,
+          limit: limit,
+          count: 0,
+          remaining: limit,
+          plan: userData.plan,
+          subscription_status: userData.subscription_status,
+          subscription_id: userData.subscription_id,
+          last_reset_date: null,
+          created_at: null,
+          is_limit_reached: false,
+          isLifetimeLimit: userData.plan === 'free',
+          hasApiKey: false // Flag to indicate no API key exists
+        }
+      });
+    }
+
+    // If there was another error, throw it
+    if (findError && findError.code !== 'PGRST116') {
+      throw findError;
+    }
+
     let currentCount = apiKeyData.count;
 
     // ✅ MODIFIED LOGIC: For free users, no daily reset
-    if (apiKeyData.users.plan === 'free') {
+    if (userData.plan === 'free') {
       // Free users: count never resets, use lifetime count
       currentCount = apiKeyData.count;
     } else {
@@ -1960,7 +1986,7 @@ app.post('/api/get-user-api-info', async (req, res) => {
       }
     }
 
-    // console.log(`📊 Retrieved API info for user: ${userName}`);
+    console.log(`📊 Retrieved API info for user: ${userName}`);
 
     // Show a generic masked API key format to indicate one exists
     const maskedApiKey = "sk-abc123************************def456";
@@ -1973,13 +1999,14 @@ app.post('/api/get-user-api-info', async (req, res) => {
         limit: limit,
         count: currentCount,
         remaining: limit - currentCount,
-        plan: apiKeyData.users.plan,
-        subscription_status: apiKeyData.users.subscription_status,
-        subscription_id: apiKeyData.users.subscription_id,
+        plan: userData.plan,
+        subscription_status: userData.subscription_status,
+        subscription_id: userData.subscription_id,
         last_reset_date: apiKeyData.last_reset_date,
         created_at: apiKeyData.created_at,
         is_limit_reached: currentCount >= limit,
-        isLifetimeLimit: apiKeyData.users.plan === 'free' // Add this flag for frontend
+        isLifetimeLimit: userData.plan === 'free',
+        hasApiKey: true // Flag to indicate API key exists
       }
     });
 
@@ -1991,7 +2018,6 @@ app.post('/api/get-user-api-info', async (req, res) => {
     });
   }
 });
-
 
 // Route to handle user authentication and database operations
 app.post('/api/handle-user-auth', async (req, res) => {
