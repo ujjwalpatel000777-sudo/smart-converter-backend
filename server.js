@@ -837,7 +837,7 @@ function parseAIResponse(aiResponse) {
 function createRefactoringPrompt(projectType, files, projectLanguage, packageJson, allFilesMetadata) {
   const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
   
-  return `You are an expert software refactoring assistant. You will COMPLETELY REWRITE all provided files with improved code.
+  const refactoringPrompt = `You are an expert software refactoring assistant. You will COMPLETELY REWRITE all provided files with improved code.
 
   **IMPORTANT PROJECT SETTINGS:**
   - Project Type: ${projectType}
@@ -865,19 +865,101 @@ function createRefactoringPrompt(projectType, files, projectLanguage, packageJso
   - turbo, lerna (monorepo tools)
   - husky, lint-staged (git hooks)
   
+  **PACKAGE USAGE DETECTION:**
+  Look for packages being used in:
+  1. Direct imports: import x from 'package-name'
+  2. Require statements: require('package-name')
+  3. Dynamic imports: import('package-name')
+  4. Configuration files that reference packages
+  5. Package.json scripts that use packages
+  6. Indirect dependencies (packages used by other packages)
+  7. Development tools used in build process
+
+  **CONSERVATIVE APPROACH:**
+  - Only suggest removing packages that are clearly unused
+  - When in doubt, keep the package
+  - Group related packages together in uninstall commands
+  - Provide clear reasoning for why each package can be removed
+  
   **PROJECT METADATA ANALYSIS:**
-  Complete project metadata for reference:
+  Complete project metadata for reference (includes ALL files, not just selected ones):
   ${JSON.stringify(allFilesMetadata, null, 2)}
 
+   **METADATA USAGE INSTRUCTIONS:**
+  1. **Cross-Reference Check**: Before removing any function, variable, or component from selected files, check if it's imported/used in OTHER files via the metadata
+  2. **Name Collision Avoidance**: When creating new functions, variables, or components, check metadata to ensure names don't clash with existing ones across the entire project
+  3. **Import Dependency Tracking**: Use metadata to understand the dependency graph - if you're refactoring a file that exports something, check which other files import it
+  4. **Safe Removal**: Only remove exports/functions/variables if metadata shows they're not imported anywhere else in the project
+  5. **Intelligent Renaming**: If renaming something that's exported, you'll know from metadata which files need import updates (but only modify the files provided to you)
+
+  **CROSS-FILE IMPACT ANALYSIS:**
+  - Before deleting any export, check allFilesMetadata to see if it's imported elsewhere
+  - When adding new exports, ensure names don't conflict with existing ones in the project
+  - Use metadata to understand the broader context of the files you're refactoring
+
+  **IMPORTANT:** If allFilesMetadata is empty {}, ignore all metadata-related instructions and proceed with standard refactoring.
+
+  
   **SECURITY ANALYSIS - EXTRACT HARDCODED SECRETS:**
   Analyze all code files and identify any hardcoded secrets, API keys, tokens, or sensitive data.
+  Look for patterns like:
+  - API keys (starting with sk-, pk-, etc.)
+  - Database URLs with credentials
+  - JWT tokens
+  - OAuth secrets
+  - Third-party service tokens
+  - Email/SMTP credentials
+  - Any hardcoded passwords or secrets
   
   **COMPLETE REWRITE INSTRUCTIONS:**
+  
   🔄 **TOTAL REPLACEMENT APPROACH:**
   - All provided files will be DELETED and RECREATED from scratch
   - You must provide COMPLETE, WORKING code for every file
   - Maintain ALL existing functionality while improving code quality
+  - Create additional utility/helper files as needed
   - Replace ALL hardcoded secrets with process.env variables
+  
+  **Refactoring Rules to Apply:**
+  
+  1. **Security First:** 
+     - Replace ALL hardcoded secrets with process.env.VARIABLE_NAME
+     - Use descriptive environment variable names
+  
+  2. **Naming Conventions:** 
+     - Use camelCase for variables and functions
+     - Use PascalCase for classes and components
+     - Use UPPER_SNAKE_CASE for constants and env vars
+  
+  3. **Modularization:** 
+     - Break large functions (>50 lines) into smaller functions
+     - Extract reusable logic into separate utility files
+     - Create shared components for repeated UI patterns
+  
+  4. **Code Organization:**
+     - Create proper file structure (utils/, components/, constants/)
+     - Extract constants and configuration into separate files
+     - Group related functions into modules
+
+  5. **DEAD CODE AND IMPORT REMOVAL:**
+     - **Unused Functions**: Identify and remove functions that are defined but never called
+     - **Unused Variables**: Remove variables that are declared but never used
+     - **Unused Parameters**: Remove function parameters that aren't used in function body
+     - **Unused Imports**: Remove all imports that aren't actually used in the file
+     - **Unused Exports**: Remove exports that aren't imported by any other file
+     - **Unused Hooks**: Detect and remove unused React hooks such as useState, useEffect, useRef, etc., that are declared but not used in functional components.
+     - **Import Consolidation**: Combine multiple imports from same module
+  
+  6. **Code Documentation:**
+     - Add comprehensive  comments
+     - Document all function parameters and return values
+     - Add  comments for complex logic
+  
+  **FILE STRUCTURE REQUIREMENTS:**
+  - Include ALL original files (completely rewritten)
+  - Create NEW files for extracted utilities/components
+  - Use logical directory structure
+  - Update ALL import/export statements to work with new structure
   
   **ORIGINAL FILES TO COMPLETELY REWRITE:**
   ${JSON.stringify({ files }, null, 2)}
@@ -892,7 +974,9 @@ function createRefactoringPrompt(projectType, files, projectLanguage, packageJso
     "totalWords": number,
     "changes_summary": "Comprehensive description of all improvements made",
     "secrets": {
-      "API_KEY": "actual-hardcoded-value-found"
+      "API_KEY": "actual-hardcoded-value-found",
+      "DATABASE_URL": "actual-db-url-with-credentials",
+      "JWT_SECRET": "actual-jwt-token"
     },
     "packageAnalysis": {
       "totalDependencies": number,
@@ -905,10 +989,16 @@ function createRefactoringPrompt(projectType, files, projectLanguage, packageJso
         "name": "package-name-1",
         "type": "dependency",
         "reason": "Not imported or used anywhere in the codebase"
+      },
+      {
+        "name": "package-name-2", 
+        "type": "devDependency",
+        "reason": "Development tool no longer needed after refactoring"
       }
     ],
     "npmUninstallCommands": [
-      "npm uninstall package-name-1 package-name-2"
+      "npm uninstall package-name-1 package-name-2",
+      "npm uninstall --save-dev dev-package-name"
     ],
     "originalFilesToDelete": [
       ${files.map(f => `"${f.path}"`).join(',\n      ')}
@@ -931,13 +1021,30 @@ function createRefactoringPrompt(projectType, files, projectLanguage, packageJso
   ✅ ALL files must contain COMPLETE, WORKING, PRODUCTION-READY code
   ✅ ZERO placeholders, TODO comments, or incomplete functions
   ✅ ALL functionality from original files must be preserved
-  ✅ Response must be valid JSON with exact structure above`;
+  ✅ All import statements must reference correct file paths
+  ✅ Code must follow ${projectLanguage} syntax perfectly
+  ✅ Response must be valid JSON with exact structure above
+  ✅ Extract ALL hardcoded secrets into the "secrets" object
+  ✅ Replace hardcoded values with process.env variables in code
+  ✅ Provide conservative unused package analysis with clear reasoning
+  ✅ Group npm uninstall commands logically for easy execution
+  
+  **FAILURE CONDITIONS TO AVOID:**
+  ❌ No incomplete code or placeholder comments
+  ❌ No missing imports or broken references
+  ❌ No syntax errors or compilation issues
+  ❌ No functionality loss from original code
+  ❌ No missed hardcoded secrets
+  ❌ No removal of essential packages
+  ❌ No unclear reasoning for package removal suggestions`;
+
+  return refactoringPrompt;
 }
 
 function createCustomGenerationPrompt(projectType, files, projectLanguage, userPrompt, allFilesMetadata, packageJson) {
   const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
   
-  return `You are an expert software development assistant. Generate completely NEW files based on user requirements.
+  const customPrompt = `You are an expert software development assistant. Generate completely NEW files based on user requirements.
 
 **PROJECT SETTINGS:**
 - Type: ${projectType}
@@ -957,9 +1064,20 @@ ${JSON.stringify(files, null, 2)}
 ${userPrompt}
 
 **CRITICAL FILE HANDLING INSTRUCTIONS:**
-1. **Modified Files**: If user asks to modify/rewrite a file, include it with isRewritten: true and complete code
+1. **Modified Files**: If user asks to modify/rewrite a file, include it with isRewritten: true and complete code.do a complete rewrite if user ask to modify a file
 2. **New Files**: If creating new files, include them with isNew: true and complete code  
 3. **Unchanged Files**: List all existing files you're NOT modifying in the "unchangedFiles" array
+4. **Only include complete code for files you're actually changing or creating**
+
+**GENERATION RULES:**
+1. **Security**: Use process.env variables for API keys/secrets (format: API_KEY_NAME="put-your-key-here")
+2. **Integration**: Follow existing project patterns and structure
+3. **Quality**: Complete, working, production-ready code only
+4. **Dependencies**: Suggest new packages if needed via npm install commands
+5. **Config Changes**: If config file changes are needed (webpack, tsconfig, etc.), create a README.md with instructions instead of modifying config files directly
+6. **File Modifications**: If user asks to modify existing files, completely rewrite those files and include them in response
+7. **Package Management**: Support both npm install and npm uninstall commands as needed
+8. **Secret Detection**: Extract any hardcoded secrets/API keys found in code and replace with environment variables
 
 **RESPONSE FORMAT:**
 {
@@ -970,16 +1088,22 @@ ${userPrompt}
   "totalWords": number,
   "changes_summary": "Description of generated/modified files and functionality",
   "secrets": {
-    "API_KEY_NAME": "put-your-key-here"
+    "API_KEY_NAME": "put-your-key-here",
+    "DATABASE_URL": "put-your-db-url-here"
   },
   "npmInstallCommands": [
-    "npm install package-name-1 package-name-2"
+    "npm install package-name-1 package-name-2",
+    "npm install --save-dev dev-package-name",
+    "npm uninstall old-package-name"
   ],
   "originalFilesToDelete": [
-    "path/to/file/being/rewritten.js"
+    "path/to/file/being/rewritten.js",
+    "path/to/obsolete/file.js"
   ],
   "unchangedFiles": [
-    "path/to/file/not/modified.js"
+    "path/to/file/not/modified.js",
+    "path/to/another/unchanged/file.tsx",
+    "components/ExistingComponent.jsx"
   ],
   "files": [
     {
@@ -988,6 +1112,20 @@ ${userPrompt}
       "isNew": true,
       "isRewritten": false,
       "changes": "Description of what this file does"
+    },
+    {
+      "path": "existing/file/to/modify${fileExtension}",
+      "content": "COMPLETE_REWRITTEN_CODE",
+      "isNew": false,
+      "isRewritten": true,
+      "changes": "Complete rewrite of existing file with modifications"
+    },
+    {
+      "path": "CONFIG_CHANGES.md",
+      "content": "config files code",
+      "isNew": true,
+      "isRewritten": false,
+      "changes": "Instructions for manual config file changes"
     }
   ]
 }
@@ -996,13 +1134,20 @@ ${userPrompt}
 ✅ Complete working code only
 ✅ No placeholders or TODOs
 ✅ Use environment variables for secrets
-✅ Follow existing project patterns`;
+✅ Follow existing project patterns
+✅ Rewrite existing files completely when modifications requested
+✅ Support both install and uninstall package commands
+✅ Extract hardcoded secrets into environment variables
+✅ List all unchanged files in unchangedFiles array
+✅ Only include files in "files" array if creating new or completely rewriting them`;
+
+  return customPrompt;
 }
 
 function createOptimizationPrompt(projectType, projectLanguage, files) {
   const fileExtension = projectLanguage === 'TypeScript' ? '.ts/.tsx' : '.js/.jsx';
-  
-  return `You are an expert code optimization specialist. Optimize the provided files for better performance, maintainability, and modern best practices.
+     
+  const optimizationPrompt = `You are an expert code optimization specialist. Optimize the provided files for better performance, maintainability, and modern best practices.
 
 **PROJECT SETTINGS:**
 - Type: ${projectType}
@@ -1018,6 +1163,9 @@ ${JSON.stringify(files, null, 2)}
 3. **Modern Practices**: Latest syntax, async patterns, security
 4. **Maintainability**: Clean code, proper documentation, type safety
 5. **Clean Imports**: Remove unused imports and dead code
+6. **Secrets Handling**: Keep any hardcoded secrets as-is in the code
+7. **Complete Rewrite**: Return only complete file code, rewrite entire code from scratch
+
 
 **RETURN JSON:**
 {
@@ -1042,8 +1190,13 @@ ${JSON.stringify(files, null, 2)}
 ✅ Preserve all functionality  
 ✅ Valid ${projectLanguage} syntax
 ✅ No placeholders or TODOs
-✅ Remove unused imports`;
+✅ Remove unused imports
+✅ Keep hardcoded secrets unchanged
+✅ Focus on measurable improvements`;
+
+  return optimizationPrompt;
 }
+
 
 // ====================
 // MAIN ROUTE HANDLERS
