@@ -205,6 +205,20 @@ async function handleSubscriptionActivated(subscription) {
     return;
   }
 
+  // Delete existing API key if it exists (upgrade scenario)
+  const { error: deleteError } = await supabase
+    .from('api_keys')
+    .update({ api_key: null })
+    .eq('name', user.name)
+    .not('api_key', 'is', null);
+
+  if (deleteError) {
+    console.log('ERROR: Failed to delete API key for upgraded user');
+    console.log('Delete error:', JSON.stringify(deleteError, null, 2));
+  } else {
+    console.log('SUCCESS: API key deleted for upgraded user (if existed)');
+  }
+
   // Reset count to 0 for newly activated pro users
   const { error: countError } = await supabase
     .from('api_keys')
@@ -223,6 +237,7 @@ async function handleSubscriptionActivated(subscription) {
 
   console.log('SUCCESS: Subscription activated for user:', user.name);
 }
+
 async function handleSubscriptionPastDue(subscription) {
   console.log('=== HANDLING SUBSCRIPTION PAST DUE ===');
   console.log('Subscription object:', JSON.stringify(subscription, null, 2));
@@ -252,6 +267,20 @@ async function handleSubscriptionPastDue(subscription) {
     console.log('ERROR: Failed to handle past due subscription in database');
     console.log('Database error:', JSON.stringify(userError, null, 2));
     return;
+  }
+
+  // Delete API key if it exists (downgrade scenario)
+  const { error: deleteError } = await supabase
+    .from('api_keys')
+    .update({ api_key: null })
+    .eq('name', user.name)
+    .not('api_key', 'is', null);
+
+  if (deleteError) {
+    console.log('ERROR: Failed to delete API key for past due user');
+    console.log('Delete error:', JSON.stringify(deleteError, null, 2));
+  } else {
+    console.log('SUCCESS: API key deleted for past due user (if existed)');
   }
 
   // Set count to 0 (used all free requests) for past due users
@@ -317,6 +346,7 @@ async function handleSubscriptionUpdated(subscription) {
     console.log('Scheduled change:', subscription.scheduledChange);
   }
 }
+
 async function handleSubscriptionCancelled(subscription) {
   console.log('=== HANDLING SUBSCRIPTION CANCELLED ===');
   console.log('Subscription object:', JSON.stringify(subscription, null, 2));
@@ -346,6 +376,20 @@ async function handleSubscriptionCancelled(subscription) {
     console.log('ERROR: Failed to cancel subscription in database');
     console.log('Database error:', JSON.stringify(userError, null, 2));
     return;
+  }
+
+  // Delete API key if it exists (cancellation scenario)
+  const { error: deleteError } = await supabase
+    .from('api_keys')
+    .update({ api_key: null })
+    .eq('name', user.name)
+    .not('api_key', 'is', null);
+
+  if (deleteError) {
+    console.log('ERROR: Failed to delete API key for cancelled user');
+    console.log('Delete error:', JSON.stringify(deleteError, null, 2));
+  } else {
+    console.log('SUCCESS: API key deleted for cancelled user (if existed)');
   }
 
   // Reset count to 0 for cancelled users (give them 50 fresh free requests)
@@ -398,6 +442,20 @@ async function handleSubscriptionPaused(subscription) {
     return;
   }
 
+  // Delete API key if it exists (pause scenario)
+  const { error: deleteError } = await supabase
+    .from('api_keys')
+    .update({ api_key: null })
+    .eq('name', user.name)
+    .not('api_key', 'is', null);
+
+  if (deleteError) {
+    console.log('ERROR: Failed to delete API key for paused user');
+    console.log('Delete error:', JSON.stringify(deleteError, null, 2));
+  } else {
+    console.log('SUCCESS: API key deleted for paused user (if existed)');
+  }
+
   // Set count to 0 (used all free requests) for paused users
   const { error: countError } = await supabase
     .from('api_keys')
@@ -446,6 +504,20 @@ async function handleSubscriptionResumed(subscription) {
     console.log('ERROR: Failed to resume subscription in database');
     console.log('Database error:', JSON.stringify(userError, null, 2));
     return;
+  }
+
+  // Delete existing API key if it exists (resume scenario - fresh start)
+  const { error: deleteError } = await supabase
+    .from('api_keys')
+    .update({ api_key: null })
+    .eq('name', user.name)
+    .not('api_key', 'is', null);
+
+  if (deleteError) {
+    console.log('ERROR: Failed to delete API key for resumed user');
+    console.log('Delete error:', JSON.stringify(deleteError, null, 2));
+  } else {
+    console.log('SUCCESS: API key deleted for resumed user (if existed)');
   }
 
   // Reset count to 0 for resumed pro users (fresh daily limit)
