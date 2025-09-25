@@ -392,7 +392,7 @@ async function handleSubscriptionCancelled(subscription) {
     console.log('SUCCESS: API key deleted for cancelled user (if existed)');
   }
 
-  // Reset count to 0 for cancelled users (give them 50 fresh free requests)
+  // Reset count to 0 for cancelled users (give them 10 fresh free requests)
   const { error: countError } = await supabase
     .from('api_keys')
     .update({ 
@@ -405,7 +405,7 @@ async function handleSubscriptionCancelled(subscription) {
     console.log('ERROR: Failed to reset count for cancelled user');
     console.log('Count error:', JSON.stringify(countError, null, 2));
   } else {
-    console.log('SUCCESS: Count reset to 0 for cancelled user (50 free requests available)');
+    console.log('SUCCESS: Count reset to 0 for cancelled user (10 free requests available)');
   }
 
   console.log('SUCCESS: Subscription cancelled and downgraded to free for subscription:', subscription.id);
