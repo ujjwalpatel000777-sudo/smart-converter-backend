@@ -619,10 +619,10 @@ async function validateAndProcessRequest(req, res, requiredFields = []) {
   // Model access validation based on plan
   if (selectedModel === 'gpt5-mini' && apiKeyData.users.plan === 'free') {
     sendSSEMessage(res, 'error', { 
-      error: 'GPT-5 Mini is only available for Pro plan users. Free users can use DeepSeek R1 or Qwen3 Coder.',
+      error: 'GPT-5 Mini is only available for Pro plan users. Free users can use DeepSeek R1',
       data: {
         currentPlan: 'free',
-        availableModels: ['deepseek-r1', 'qwen3-coder'],
+        availableModels: ['deepseek-r1'],
         proModels: ['gpt5-mini']
       }
     });
@@ -630,9 +630,9 @@ async function validateAndProcessRequest(req, res, requiredFields = []) {
     return null;
   }
 
-  // For free users using DeepSeek or Qwen models, require their OpenRouter API key
+  // For free users using DeepSeek, require their OpenRouter API key
   if (apiKeyData.users.plan === 'free' && 
-      (selectedModel === 'deepseek-r1' || selectedModel === 'qwen3-coder')) {
+      selectedModel === 'deepseek-r1' ) {
     
     console.log('Free user detected using free model - checking userApiKey...');
     console.log('userApiKey exists:', !!userApiKey);
@@ -642,7 +642,7 @@ async function validateAndProcessRequest(req, res, requiredFields = []) {
     if (!userApiKey || typeof userApiKey !== 'string' || userApiKey.trim() === '') {
       console.log('ERROR: userApiKey validation failed');
       sendSSEMessage(res, 'error', { 
-        error: 'Free users must provide their OpenRouter API key to use DeepSeek R1 or Qwen3 Coder models.',
+        error: 'Free users must provide their OpenRouter API key to use DeepSeek R1 model.',
         data: {
           currentPlan: 'free',
           requiredField: 'userApiKey',
@@ -751,60 +751,7 @@ async function callAIModel(prompt, model, res, userPlan = 'pro', userApiKey = nu
       throw new Error('Pro users should use GPT-5 Mini model instead of DeepSeek R1');
     }
     
-  } else if (model === 'qwen3-coder') {
-    const actualModel = "qwen/qwen3-coder:free";
-    
-    if (userPlan === 'free') {
-      // Free users: use their provided OpenRouter API key
-      if (!userApiKey) {
-        throw new Error('OpenRouter API key is required for free users to use Qwen3 Coder');
-      }
-      
-      console.log('Using user-provided OpenRouter API key for free user (Qwen3 Coder)');
-      const userClient = new OpenAI({
-        baseURL: "https://openrouter.ai/api/v1",
-        apiKey: userApiKey,
-      });
-      
-      try {
-        const completion = await userClient.chat.completions.create({
-          model: actualModel,
-          messages: [
-            {
-              role: 'system',
-              content: 'You are an expert software development assistant. Always return valid JSON responses as requested.'
-            },
-            {
-              role: 'user',
-              content: prompt
-            }
-          ],
-          temperature: 0.0,
-          stream: true
-        });
-
-        let fullResponse = '';
-        for await (const chunk of completion) {
-          const content = chunk.choices[0]?.delta?.content || '';
-          if (content) {
-            fullResponse += content;
-            sendSSEMessage(res, 'chunk', { content });
-          }
-        }
-
-        console.log('Qwen3 Coder API call successful with user-provided OpenRouter key');
-        return fullResponse;
-
-      } catch (error) {
-        console.log('Qwen3 Coder API call failed with user-provided key:', error.message);
-        throw new Error(`Qwen3 Coder API call failed with your OpenRouter API key: ${error.message}`);
-      }
-    } else {
-      // Pro users should use GPT-5 Mini instead
-      throw new Error('Pro users should use GPT-5 Mini model instead of Qwen3 Coder');
-    }
-    
-  } else if (model === 'gpt5-mini') {
+  }else if (model === 'gpt5-mini') {
     // Only for Pro users
     if (userPlan === 'free') {
       throw new Error('GPT-5 Mini is only available for Pro users');
@@ -845,7 +792,7 @@ async function callAIModel(prompt, model, res, userPlan = 'pro', userApiKey = nu
       throw error;
     }
   } else {
-    throw new Error(`Unsupported model: ${model}. Available models: deepseek-r1, qwen3-coder (free), gpt5-mini (pro)`);
+    throw new Error(`Unsupported model: ${model}. Available models: deepseek-r1 (free), gpt5-mini (pro)`);
   }
 }
 
