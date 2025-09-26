@@ -563,15 +563,12 @@ function endSSE(res) {
 }
 
 async function validateAndProcessRequest(req, res, requiredFields = []) {
-  const { api_key, selectedModel, userApiKey } = req.body;
+  const { api_key, selectedModel } = req.body;
   
   // DEBUG LOGGING
   console.log('=== VALIDATION DEBUG ===');
   console.log('Received api_key:', api_key ? 'PROVIDED' : 'MISSING');
   console.log('Received selectedModel:', selectedModel);
-  console.log('Received userApiKey:', userApiKey ? 'PROVIDED' : 'MISSING');
-  console.log('userApiKey type:', typeof userApiKey);
-  console.log('userApiKey value (first 10 chars):', userApiKey ? userApiKey.substring(0, 10) + '...' : 'null/undefined');
   console.log('Request body keys:', Object.keys(req.body));
   
   // Setup SSE headers
@@ -630,34 +627,9 @@ async function validateAndProcessRequest(req, res, requiredFields = []) {
     return null;
   }
 
-  // For free users using DeepSeek, require their OpenRouter API key
-  if (apiKeyData.users.plan === 'free' && 
-      selectedModel === 'deepseek-r1' ) {
-    
-    console.log('Free user detected using free model - checking userApiKey...');
-    console.log('userApiKey exists:', !!userApiKey);
-    console.log('userApiKey type:', typeof userApiKey);
-    console.log('userApiKey trimmed length:', userApiKey ? userApiKey.trim().length : 0);
-    
-    if (!userApiKey || typeof userApiKey !== 'string' || userApiKey.trim() === '') {
-      console.log('ERROR: userApiKey validation failed');
-      sendSSEMessage(res, 'error', { 
-        error: 'Free users must provide their OpenRouter API key to use DeepSeek R1 model.',
-        data: {
-          currentPlan: 'free',
-          requiredField: 'userApiKey',
-          message: 'Please provide your OpenRouter API key in the userApiKey field',
-          received: {
-            userApiKey: userApiKey ? 'PROVIDED_BUT_INVALID' : 'NOT_PROVIDED',
-            selectedModel: selectedModel
-          }
-        }
-      });
-      endSSE(res);
-      return null;
-    }
-    
-    console.log('userApiKey validation passed for free user');
+  // For free users using DeepSeek, they use their OpenRouter API key as api_key
+  if (apiKeyData.users.plan === 'free' && selectedModel === 'deepseek-r1') {
+    console.log('Free user detected using DeepSeek - api_key will be used as OpenRouter API key');
   }
 
   sendSSEMessage(res, 'status', { message: 'Checking usage limits...' });
@@ -693,24 +665,23 @@ async function validateAndProcessRequest(req, res, requiredFields = []) {
     apiKeyData,
     countResult,
     selectedModel,
-    userApiKey: userApiKey?.trim() // Pass user's API key if provided
+    apiKey: apiKey // Pass the api_key for use in AI model calls
   };
 }
-
-async function callAIModel(prompt, model, res, userPlan = 'pro', userApiKey = null) {
+async function callAIModel(prompt, model, res, userPlan = 'pro', apiKey = null) {
   if (model === 'deepseek-r1') {
     const actualModel = "deepseek/deepseek-r1-0528:free";
     
     if (userPlan === 'free') {
-      // Free users: use their provided OpenRouter API key
-      if (!userApiKey) {
+      // Free users: use their provided OpenRouter API key (which is in api_key)
+      if (!apiKey) {
         throw new Error('OpenRouter API key is required for free users to use DeepSeek R1');
       }
       
-      console.log('Using user-provided OpenRouter API key for free user (DeepSeek R1)');
+      console.log('Using provided OpenRouter API key for free user (DeepSeek R1)');
       const userClient = new OpenAI({
         baseURL: "https://openrouter.ai/api/v1",
-        apiKey: userApiKey,
+        apiKey: apiKey,
       });
       
       try {
@@ -739,11 +710,11 @@ async function callAIModel(prompt, model, res, userPlan = 'pro', userApiKey = nu
           }
         }
 
-        console.log('DeepSeek R1 API call successful with user-provided OpenRouter key');
+        console.log('DeepSeek R1 API call successful with provided OpenRouter key');
         return fullResponse;
 
       } catch (error) {
-        console.log('DeepSeek R1 API call failed with user-provided key:', error.message);
+        console.log('DeepSeek R1 API call failed with provided key:', error.message);
         throw new Error(`DeepSeek R1 API call failed with your OpenRouter API key: ${error.message}`);
       }
     } else {
@@ -751,7 +722,7 @@ async function callAIModel(prompt, model, res, userPlan = 'pro', userApiKey = nu
       throw new Error('Pro users should use GPT-5 Mini model instead of DeepSeek R1');
     }
     
-  }else if (model === 'gpt5-mini') {
+  } else if (model === 'gpt5-mini') {
     // Only for Pro users
     if (userPlan === 'free') {
       throw new Error('GPT-5 Mini is only available for Pro users');
@@ -1232,7 +1203,7 @@ app.post('/api/process-code', async (req, res) => {
     
     if (!validationResult) return;
     
-    const { apiKeyData, countResult, selectedModel, userApiKey } = validationResult;
+    const { apiKeyData, countResult, selectedModel, apiKey } = validationResult;
 
     // Validation for files
     if (!files || !Array.isArray(files) || files.length === 0) {
@@ -1254,13 +1225,12 @@ app.post('/api/process-code', async (req, res) => {
 
     sendSSEMessage(res, 'status', { message: 'Starting AI processing with streaming...' });
     
-    // UPDATED: Pass user plan and API key to callAIModel
     const aiResponse = await callAIModel(
       prompt, 
       selectedModel, 
       res, 
       apiKeyData.users.plan, 
-      userApiKey
+      apiKey
     );
 
     sendSSEMessage(res, 'status', { message: 'AI processing completed. Parsing response...' });
@@ -1319,7 +1289,7 @@ app.post('/api/generate-custom', async (req, res) => {
     
     if (!validationResult) return;
     
-    const { apiKeyData, countResult, selectedModel, userApiKey } = validationResult;
+    const { apiKeyData, countResult, selectedModel, apiKey } = validationResult;
 
     // Validate userPrompt
     if (!userPrompt || typeof userPrompt !== 'string' || userPrompt.trim() === '') {
@@ -1348,13 +1318,12 @@ app.post('/api/generate-custom', async (req, res) => {
 
     sendSSEMessage(res, 'status', { message: 'Starting AI processing with streaming...' });
     
-    // UPDATED: Pass user plan and API key to callAIModel
     const aiResponse = await callAIModel(
       prompt, 
       selectedModel, 
       res, 
       apiKeyData.users.plan, 
-      userApiKey
+      apiKey
     );
 
     sendSSEMessage(res, 'status', { message: 'AI processing completed. Parsing response...' });
@@ -1413,7 +1382,7 @@ app.post('/api/optimize-files', async (req, res) => {
     
     if (!validationResult) return;
     
-    const { apiKeyData, countResult, selectedModel, userApiKey } = validationResult;
+    const { apiKeyData, countResult, selectedModel, apiKey } = validationResult;
 
     // Validation for files
     if (!files || !Array.isArray(files) || files.length === 0) {
@@ -1428,13 +1397,12 @@ app.post('/api/optimize-files', async (req, res) => {
 
     sendSSEMessage(res, 'status', { message: 'Starting AI optimization analysis with streaming...' });
     
-    // UPDATED: Pass user plan and API key to callAIModel
     const aiResponse = await callAIModel(
       prompt, 
       selectedModel, 
       res, 
       apiKeyData.users.plan, 
-      userApiKey
+      apiKey
     );
 
     sendSSEMessage(res, 'status', { message: 'AI optimization completed. Parsing response...' });
