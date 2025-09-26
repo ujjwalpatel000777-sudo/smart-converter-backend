@@ -699,7 +699,7 @@ async function validateAndProcessRequest(req, res, requiredFields = []) {
 
 async function callAIModel(prompt, model, res, userPlan = 'pro', userApiKey = null) {
   if (model === 'deepseek-r1') {
-    const actualModel = "deepseek/deepseek-r1:free";
+    const actualModel = "deepseek/deepseek-r1-0528:free";
     
     if (userPlan === 'free') {
       // Free users: use their provided OpenRouter API key
