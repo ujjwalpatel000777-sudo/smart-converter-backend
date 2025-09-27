@@ -563,21 +563,18 @@ function endSSE(res) {
 }
 
 async function validateAndProcessRequest(req, res, requiredFields = []) {
-  const { api_key, selectedModel } = req.body;
+  const { user_email, selectedModel } = req.body;
   
-  // DEBUG LOGGING
   console.log('=== VALIDATION DEBUG ===');
-  console.log('Received api_key:', api_key ? 'PROVIDED' : 'MISSING');
+  console.log('Received user_email:', user_email ? 'PROVIDED' : 'MISSING');
   console.log('Received selectedModel:', selectedModel);
-  console.log('Request body keys:', Object.keys(req.body));
   
-  // Setup SSE headers
   setupSSEHeaders(res);
   sendSSEMessage(res, 'connected', { message: 'Stream connected successfully' });
 
-  // API key validation
-  if (!api_key || typeof api_key !== 'string' || api_key.trim() === '') {
-    sendSSEMessage(res, 'error', { error: 'API key is required and must be a valid string' });
+  // Check if user is logged in
+  if (!user_email || typeof user_email !== 'string' || user_email.trim() === '') {
+    sendSSEMessage(res, 'error', { error: 'Please login first to use this service' });
     endSSE(res);
     return null;
   }
@@ -598,23 +595,27 @@ async function validateAndProcessRequest(req, res, requiredFields = []) {
     }
   }
 
-  const apiKey = api_key.trim();
-  sendSSEMessage(res, 'status', { message: 'Validating API key...' });
+  const userEmail = user_email.trim();
+  sendSSEMessage(res, 'status', { message: 'Validating user access...' });
 
-  // Find the API key and associated user
-  const apiKeyData = await findApiKeyRecord(apiKey);
-  
-  if (!apiKeyData) {
-    sendSSEMessage(res, 'error', { error: 'Invalid API key' });
+  // Get user plan and API key info
+  const { data: userData, error: userError } = await supabase
+    .from('users')
+    .select('name, plan, subscription_status')
+    .eq('name', userEmail)
+    .single();
+
+  if (userError || !userData) {
+    sendSSEMessage(res, 'error', { error: 'User not found. Please ensure you are registered.' });
     endSSE(res);
     return null;
   }
 
-  console.log('User plan:', apiKeyData.users.plan);
+  console.log('User plan:', userData.plan);
   console.log('Selected model:', selectedModel);
 
   // Model access validation based on plan
-  if (selectedModel === 'gpt5-mini' && apiKeyData.users.plan === 'free') {
+  if (selectedModel === 'gpt5-mini' && userData.plan === 'free') {
     sendSSEMessage(res, 'error', { 
       error: 'GPT-5 Mini is only available for Pro plan users. Free users can use DeepSeek R1',
       data: {
@@ -627,9 +628,61 @@ async function validateAndProcessRequest(req, res, requiredFields = []) {
     return null;
   }
 
-  // For free users using DeepSeek, they use their OpenRouter API key as api_key
-  if (apiKeyData.users.plan === 'free' && selectedModel === 'deepseek-r1') {
-    console.log('Free user detected using DeepSeek - api_key will be used as OpenRouter API key');
+  // Handle free users using DeepSeek
+  if (userData.plan === 'free' && selectedModel === 'deepseek-r1') {
+    console.log('Free user detected using DeepSeek - checking/creating API key placeholder');
+    
+    // Check if API key record exists, if not create with random placeholder
+    const { data: apiKeyRecord, error: apiKeyError } = await supabase
+      .from('api_keys')
+      .select('name, api_key, count, last_reset_date')
+      .eq('name', userEmail)
+      .single();
+
+    if (apiKeyError && apiKeyError.code !== 'PGRST116') {
+      throw apiKeyError;
+    }
+
+    // If no API key record exists, create one with placeholder
+    if (!apiKeyRecord) {
+      const placeholderKey = 'placeholder-' + crypto.randomBytes(16).toString('hex');
+      const hashedPlaceholder = await hashApiKey(placeholderKey);
+      
+      const { error: insertError } = await supabase
+        .from('api_keys')
+        .insert([{
+          name: userEmail,
+          api_key: hashedPlaceholder,
+          count: 0,
+          last_reset_date: new Date().toISOString().split('T')[0]
+        }]);
+
+      if (insertError) {
+        throw insertError;
+      }
+    }
+    // If API key is null, update with placeholder
+    else if (!apiKeyRecord.api_key) {
+      const placeholderKey = 'placeholder-' + crypto.randomBytes(16).toString('hex');
+      const hashedPlaceholder = await hashApiKey(placeholderKey);
+      
+      const { error: updateError } = await supabase
+        .from('api_keys')
+        .update({ api_key: hashedPlaceholder })
+        .eq('name', userEmail);
+
+      if (updateError) {
+        throw updateError;
+      }
+    }
+
+    // For free users, we'll get the OpenRouter API key from request body
+    const { api_key } = req.body;
+    if (!api_key || typeof api_key !== 'string' || api_key.trim() === '') {
+      sendSSEMessage(res, 'error', { error: 'OpenRouter API key is required for free users to use DeepSeek R1' });
+      endSSE(res);
+      return null;
+    }
   }
 
   sendSSEMessage(res, 'status', { message: 'Checking usage limits...' });
@@ -637,7 +690,7 @@ async function validateAndProcessRequest(req, res, requiredFields = []) {
   // Use the PostgreSQL function for count management
   const { data: countResult, error: countError } = await supabase
     .rpc('increment_api_count', {
-      api_name: apiKeyData.name
+      api_name: userEmail
     });
 
   if (countError) {
@@ -652,7 +705,7 @@ async function validateAndProcessRequest(req, res, requiredFields = []) {
         count: countResult.count,
         limit: countResult.limit,
         remaining: countResult.limit - countResult.count,
-        plan: apiKeyData.users.plan
+        plan: userData.plan
       }
     });
     endSSE(res);
@@ -661,11 +714,17 @@ async function validateAndProcessRequest(req, res, requiredFields = []) {
 
   console.log('Validation successful, returning data...');
 
+  // For free users, pass the OpenRouter API key from request
+  const apiKeyForModel = userData.plan === 'free' ? req.body.api_key?.trim() : null;
+
   return {
-    apiKeyData,
+    apiKeyData: { 
+      name: userEmail, 
+      users: { plan: userData.plan } 
+    },
     countResult,
     selectedModel,
-    apiKey: apiKey // Pass the api_key for use in AI model calls
+    apiKey: apiKeyForModel
   };
 }
 async function callAIModel(prompt, model, res, userPlan = 'pro', apiKey = null) {
@@ -1195,12 +1254,11 @@ ${JSON.stringify(files, null, 2)}
 
 app.post('/api/process-code', async (req, res) => {
   try {
-    const { projectType, files, projectLanguage, packageJson, allFilesMetadata } = req.body;
+    const { projectType, files, projectLanguage, packageJson, allFilesMetadata, user_email } = req.body;
     
     const validationResult = await validateAndProcessRequest(req, res, [
-      'projectType', 'files', 'projectLanguage', 'packageJson'
+      'projectType', 'files', 'projectLanguage', 'packageJson', 'user_email'
     ]);
-    
     if (!validationResult) return;
     
     const { apiKeyData, countResult, selectedModel, apiKey } = validationResult;
@@ -1281,10 +1339,10 @@ app.post('/api/process-code', async (req, res) => {
 // UPDATED /api/generate-custom route
 app.post('/api/generate-custom', async (req, res) => {
   try {
-    const { projectType, files, projectLanguage, userPrompt, allFilesMetadata, packageJson } = req.body;
+    const { projectType, files, projectLanguage, userPrompt, allFilesMetadata, packageJson, user_email } = req.body;
     
     const validationResult = await validateAndProcessRequest(req, res, [
-      'projectType', 'projectLanguage', 'userPrompt', 'packageJson'
+      'projectType', 'projectLanguage', 'userPrompt', 'packageJson', 'user_email'
     ]);
     
     if (!validationResult) return;
@@ -1374,10 +1432,10 @@ app.post('/api/generate-custom', async (req, res) => {
 // UPDATED /api/optimize-files route
 app.post('/api/optimize-files', async (req, res) => {
   try {
-    const { projectType, files, projectLanguage } = req.body;
+    const { projectType, files, projectLanguage, user_email } = req.body;
     
     const validationResult = await validateAndProcessRequest(req, res, [
-      'projectType', 'projectLanguage', 'files'
+      'projectType', 'projectLanguage', 'files', 'user_email'
     ]);
     
     if (!validationResult) return;
@@ -1729,10 +1787,9 @@ app.post('/api/payment/create-subscription', async (req, res) => {
 
 
 
-
 app.post('/api/generate-api-key', async (req, res) => {
   try {
-    const { name, api_key: userProvidedApiKey } = req.body;
+    const { name } = req.body;
 
     // Validation
     if (!name || typeof name !== 'string' || name.trim() === '') {
@@ -1744,7 +1801,7 @@ app.post('/api/generate-api-key', async (req, res) => {
 
     const userName = name.trim();
 
-    // Check if user exists, if not create them with free plan
+    // Check if user exists
     const { data: existingUser, error: userCheckError } = await supabase
       .from('users')
       .select('name, plan')
@@ -1755,7 +1812,7 @@ app.post('/api/generate-api-key', async (req, res) => {
       throw userCheckError;
     }
 
-    // Create user if doesn't exist
+    // Create user if doesn't exist (default to free plan)
     if (!existingUser) {
       const { error: userCreateError } = await supabase
         .from('users')
@@ -1771,7 +1828,20 @@ app.post('/api/generate-api-key', async (req, res) => {
 
     const userPlan = existingUser?.plan || 'free';
 
-    // Check if API key already exists for this user
+    // Block free users from using this route
+    if (userPlan === 'free') {
+      return res.status(403).json({
+        success: false,
+        error: 'API key generation is only available for Pro users',
+        message: 'Free users can use the service directly with their own OpenRouter API key. Upgrade to Pro to get a generated API key.',
+        data: {
+          currentPlan: 'free',
+          upgradeRequired: true
+        }
+      });
+    }
+
+    // Check if API key already exists for pro user
     const { data: existingApiKey, error: apiKeyCheckError } = await supabase
       .from('api_keys')
       .select('name, api_key, count, last_reset_date')
@@ -1790,56 +1860,28 @@ app.post('/api/generate-api-key', async (req, res) => {
       });
     }
 
-    let newApiKey;
-    let hashedApiKey;
-
-    // Handle based on user plan
-    if (userPlan === 'free') {
-      // FREE USERS: Must provide their own API key
-      if (!userProvidedApiKey || typeof userProvidedApiKey !== 'string' || userProvidedApiKey.trim() === '') {
-        return res.status(400).json({
-          success: false,
-          error: 'Free users must provide their own API key'
-        });
-      }
-
-      // FIX: Properly trim the API key before using it
-      const trimmedApiKey = userProvidedApiKey.trim();
-      newApiKey = trimmedApiKey;
-      hashedApiKey = await hashApiKey(newApiKey);
-    } else if (userPlan === 'pro') {
-      // PRO USERS: Generate API key automatically
-      newApiKey = 'sk-' + crypto.randomBytes(32).toString('hex');
-      hashedApiKey = await hashApiKey(newApiKey);
-    } else {
-      return res.status(403).json({
-        success: false,
-        error: 'Invalid user plan. Only free and paid users are supported.'
-      });
-    }
+    // Generate API key for pro user
+    const newApiKey = 'sk-' + crypto.randomBytes(32).toString('hex');
+    const hashedApiKey = await hashApiKey(newApiKey);
 
     // Preserve count and reset date logic
     let preservedCount = 0;
     let preservedResetDate = new Date().toISOString().split('T')[0];
     
     if (existingApiKey) {
-      // BOTH FREE AND PRO USERS: Daily reset logic
       const today = new Date().toISOString().split('T')[0];
       
       if (existingApiKey.last_reset_date === today) {
-        // Same day - preserve the count to maintain daily limit
         preservedCount = existingApiKey.count;
         preservedResetDate = existingApiKey.last_reset_date;
       } else {
-        // Different day - reset count to 0 (normal daily reset)
         preservedCount = 0;
         preservedResetDate = today;
       }
     }
 
-    // Insert or update API key record with preserved count
+    // Insert or update API key record
     if (existingApiKey) {
-      // Update existing record
       const { error: updateError } = await supabase
         .from('api_keys')
         .update({
@@ -1853,7 +1895,6 @@ app.post('/api/generate-api-key', async (req, res) => {
         throw updateError;
       }
     } else {
-      // Insert new record with count 0 (new user)
       const { error: insertError } = await supabase
         .from('api_keys')
         .insert([{
@@ -1868,33 +1909,21 @@ app.post('/api/generate-api-key', async (req, res) => {
       }
     }
 
-    // Different response messages based on plan
-    const responseMessage = userPlan === 'free' 
-      ? 'API key stored successfully' 
-      : 'API key generated successfully';
-
-    const responseData = {
-      name: userName,
-      plan: userPlan,
-      count: preservedCount,
-      preserved_usage: preservedCount > 0
-    };
-
-    // Only return the plain API key to pro users (since they generated it)
-    // Free users already have their key, so we don't need to return it
-    if (userPlan === 'pro') {
-      responseData.api_key = newApiKey;
-      responseData.hasApiKey = true; // Add this line
-    }
-
     res.json({
       success: true,
-      message: responseMessage,
-      data: responseData
+      message: 'API key generated successfully',
+      data: {
+        name: userName,
+        plan: userPlan,
+        count: preservedCount,
+        preserved_usage: preservedCount > 0,
+        api_key: newApiKey,
+        hasApiKey: true
+      }
     });
 
   } catch (error) {
-    console.error('❌ Error processing API key:', error);
+    console.error('Error processing API key:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Internal server error'
